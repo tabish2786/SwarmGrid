@@ -30,4 +30,8 @@ std::string renderAgents(const Grid& grid, const std::vector<Point>& positions);
 // or an obstacle.
 std::string renderPath(const Grid& grid, const std::vector<CellId>& path);
 
+// "(x,y)@t" for every timestep, space separated, e.g. "(0,0)@0 (1,0)@1 (1,0)@2" (a repeated
+// cell is a wait). Throws std::invalid_argument for a cell id outside the grid.
+std::string formatTimedPath(const Grid& grid, const std::vector<CellId>& path);
+
 }  // namespace swarmgrid

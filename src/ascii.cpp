@@ -66,4 +66,19 @@ std::string renderPath(const Grid& grid, const std::vector<CellId>& path) {
     return out;
 }
 
+std::string formatTimedPath(const Grid& grid, const std::vector<CellId>& path) {
+    std::string out;
+    for (std::size_t t = 0; t < path.size(); ++t) {
+        const CellId c = path[t];
+        if (c < 0 || c >= grid.numCells()) {
+            throw std::invalid_argument("formatTimedPath: cell " + std::to_string(c) +
+                                        " is outside the grid");
+        }
+        const Point p = grid.toPoint(c);
+        if (t > 0) out += ' ';
+        out += '(' + std::to_string(p.x) + ',' + std::to_string(p.y) + ")@" + std::to_string(t);
+    }
+    return out;
+}
+
 }  // namespace swarmgrid

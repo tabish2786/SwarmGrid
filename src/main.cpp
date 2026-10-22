@@ -4,21 +4,28 @@
 //   swarmgrid warehouse [numAgents] [seed]
 //   swarmgrid path <file.map> <file.scen> <agentIndex>
 //   swarmgrid astar-bench [numQueries] [seed]
+//   swarmgrid st-demo
+//   swarmgrid export-plan <file.map> <file.scen> <numAgents> <out.json>
+//   swarmgrid export-demos <out.js>
 //
 // Later milestones add: solve, validate, bench, lifelong.
 
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "swarmgrid/ascii.hpp"
 #include "swarmgrid/astar.hpp"
 #include "swarmgrid/grid.hpp"
 #include "swarmgrid/heuristic.hpp"
 #include "swarmgrid/map_io.hpp"
+#include "swarmgrid/plan_io.hpp"
+#include "swarmgrid/space_time_astar.hpp"
 #include "swarmgrid/warehouse_gen.hpp"
 
 namespace {
@@ -28,7 +35,10 @@ void printUsage() {
               << "  swarmgrid map <file.map> [file.scen] [numAgents]\n"
               << "  swarmgrid warehouse [numAgents] [seed]\n"
               << "  swarmgrid path <file.map> <file.scen> <agentIndex>\n"
-              << "  swarmgrid astar-bench [numQueries] [seed]\n";
+              << "  swarmgrid astar-bench [numQueries] [seed]\n"
+              << "  swarmgrid st-demo\n"
+              << "  swarmgrid export-plan <file.map> <file.scen> <numAgents> <out.json>\n"
+              << "  swarmgrid export-demos <out.js>\n";
 }
 
 // Strict integer argument: the whole text must be a number, otherwise an error that names the
@@ -135,11 +145,20 @@ int runPath(int argc, char** argv) {
     return 0;
 }
 
+struct BenchResult {
+    int queries = 0;
+    std::uint32_t seed = 0;
+    int width = 0;
+    int height = 0;
+    long long totalMoves = 0;
+    long long manExpanded = 0;
+    long long bfsExpanded = 0;
+    long long bfsTableWork = 0;  // cells visited while building the BFS tables
+};
+
 // Same random queries on the generated warehouse, solved with both heuristics.
 // Expansion counts are deterministic, so they are identical on every machine.
-int runAstarBench(int argc, char** argv) {
-    const int k = argc >= 3 ? parseIntArg(argv[2], "numQueries") : 100;
-    const std::uint32_t seed = argc >= 4 ? parseSeedArg(argv[3]) : 42u;
+BenchResult computeAstarBench(int k, std::uint32_t seed) {
     const swarmgrid::Grid grid = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
     const int freeCells = grid.numCells() - grid.countObstacles();
     if (k < 1 || k > freeCells) {
@@ -148,10 +167,15 @@ int runAstarBench(int argc, char** argv) {
     }
     const swarmgrid::MapfInstance inst = swarmgrid::generateRandomInstance(grid, k, seed);
 
-    long long bfsExpanded = 0;
-    long long manExpanded = 0;
-    long long totalMoves = 0;
-    long long bfsTableWork = 0;  // cells visited while building the BFS tables
+    BenchResult r;
+    r.queries = k;
+    r.seed = seed;
+    r.width = grid.width();
+    r.height = grid.height();
+    long long& bfsExpanded = r.bfsExpanded;
+    long long& manExpanded = r.manExpanded;
+    long long& totalMoves = r.totalMoves;
+    long long& bfsTableWork = r.bfsTableWork;
     for (std::size_t i = 0; i < inst.starts.size(); ++i) {
         const swarmgrid::CellId s = grid.toId(inst.starts[i]);
         const swarmgrid::CellId t = grid.toId(inst.goals[i]);
@@ -174,20 +198,187 @@ int runAstarBench(int argc, char** argv) {
     if (bfsExpanded > manExpanded) {
         throw std::logic_error("BFS heuristic expanded more than Manhattan (bug)");
     }
+    return r;
+}
+
+int runAstarBench(int argc, char** argv) {
+    const int k = argc >= 3 ? parseIntArg(argv[2], "numQueries") : 100;
+    const std::uint32_t seed = argc >= 4 ? parseSeedArg(argv[3]) : 42u;
+    const BenchResult r = computeAstarBench(k, seed);
+    const long long manExpanded = r.manExpanded;
+    const long long bfsExpanded = r.bfsExpanded;
     // Percentage in tenths, rounded half up with integer math so the printed text is identical
     // on every C runtime (printf rounding of doubles differs between glibc and old Windows CRTs).
     const long long tenths = (2000 * (manExpanded - bfsExpanded) + manExpanded) / (2 * manExpanded);
-    std::cout << "map: generated warehouse " << grid.width() << " x " << grid.height()
+    std::cout << "map: generated warehouse " << r.width << " x " << r.height
               << ", queries: " << k << ", seed: " << seed << '\n'
-              << "total optimal moves:               " << totalMoves << '\n'
+              << "total optimal moves:               " << r.totalMoves << '\n'
               << "expanded with Manhattan heuristic: " << manExpanded << '\n'
               << "expanded with BFS heuristic:       " << bfsExpanded
               << "  (= moves + queries: an exact heuristic walks one optimal path)\n"
               << "expansion reduction:               " << tenths / 10 << '.' << tenths % 10 << "%\n"
-              << "BFS table build work:              " << bfsTableWork << " cell visits\n"
+              << "BFS table build work:              " << r.bfsTableWork << " cell visits\n"
               << "note: every query here has a different goal, so each BFS table is used once and\n"
               << "      costs more than it saves. Tables pay off when one goal is searched many\n"
               << "      times (e.g. CBS replanning the same agent).\n";
+    return 0;
+}
+
+// M2 demo: one corridor, four constraint sets, and how each one changes the timed path.
+int runSpaceTimeDemo() {
+    const swarmgrid::Grid grid(5, 1);  // S . . . G
+    const swarmgrid::CellId start = grid.toId(0, 0);
+    const swarmgrid::CellId goal = grid.toId(4, 0);
+    const std::vector<int> h = swarmgrid::bfsDistances(grid, goal);
+
+    struct Case {
+        const char* label;
+        std::vector<swarmgrid::Constraint> constraints;
+    };
+    const std::vector<Case> cases = {
+        {"no constraints            ", {}},
+        {"vertex: not (2,0) at t=2  ", {swarmgrid::vertexConstraint(0, grid.toId(2, 0), 2)}},
+        {"edge: not (0,0)->(1,0) t=1",
+         {swarmgrid::edgeConstraint(0, grid.toId(0, 0), grid.toId(1, 0), 1)}},
+        {"goal: not (4,0) at t=6    ", {swarmgrid::vertexConstraint(0, goal, 6)}},
+    };
+
+    std::cout << "corridor 5 x 1, start (0,0), goal (4,0)\n";
+    for (const Case& c : cases) {
+        const swarmgrid::ConstraintTable table(c.constraints, 0);
+        const auto path = swarmgrid::spaceTimeAstar(grid, start, goal, h, table);
+        std::cout << c.label << "  ";
+        if (!path) {
+            std::cout << "no path\n";
+            continue;
+        }
+        std::cout << "arrival " << path->size() - 1 << ": "
+                  << swarmgrid::formatTimedPath(grid, *path) << '\n';
+    }
+    return 0;
+}
+
+// Every agent planned on its own with A* + BFS heuristic: no coordination, so paths may collide.
+swarmgrid::PlanExport independentPlan(const swarmgrid::MapfInstance& inst, const std::string& id,
+                                      const std::string& title) {
+    swarmgrid::PlanExport plan;
+    plan.id = id;
+    plan.title = title;
+    plan.solver = "Independent A* per robot (BFS heuristic). No coordination yet.";
+    plan.note =
+        "Each robot is planned on its own, so the robots don't know about each other yet. "
+        "Red rings mark collisions. Conflict-Based Search (milestone M4) will remove them.";
+    plan.grid = inst.grid;
+    plan.starts = inst.starts;
+    plan.goals = inst.goals;
+    for (std::size_t i = 0; i < inst.starts.size(); ++i) {
+        const swarmgrid::CellId s = inst.grid.toId(inst.starts[i]);
+        const swarmgrid::CellId t = inst.grid.toId(inst.goals[i]);
+        swarmgrid::SearchStats stats;
+        const auto path = swarmgrid::astar(inst.grid, s, t, swarmgrid::bfsDistances(inst.grid, t),
+                                           &stats);
+        if (!path) {
+            throw std::runtime_error("agent " + std::to_string(i) + " cannot reach its goal");
+        }
+        plan.paths.push_back(*path);
+        plan.expanded.push_back(stats.expanded);
+    }
+    return plan;
+}
+
+// M2 showcase: four robots, each in its own corridor with its own constraints.
+swarmgrid::PlanExport constraintsPlan() {
+    swarmgrid::PlanExport plan;
+    plan.id = "constraints";
+    plan.title = "Space-time A* with constraints";
+    plan.solver = "Space-time A* per robot (M2), each with its own constraint table.";
+    plan.note =
+        "Each robot has its own corridor and its own constraints. Robot 0: none. Robot 1: may "
+        "not be on (2,2) at t=2. Robot 2: may not move (0,4)->(1,4) at t=1. Robot 3: may not be "
+        "on its goal (4,6) at t=6. Watch them wait instead of breaking a constraint.";
+    plan.grid = swarmgrid::Grid(5, 7);  // corridors on rows 0, 2, 4, 6; walls in between
+    for (int y = 1; y < 7; y += 2) {
+        for (int x = 0; x < 5; ++x) plan.grid.setObstacle(x, y, true);
+    }
+    const swarmgrid::Grid& g = plan.grid;
+    plan.constraints = {
+        swarmgrid::vertexConstraint(1, g.toId(2, 2), 2),
+        swarmgrid::edgeConstraint(2, g.toId(0, 4), g.toId(1, 4), 1),
+        swarmgrid::vertexConstraint(3, g.toId(4, 6), 6),
+    };
+    for (int i = 0; i < 4; ++i) {
+        const swarmgrid::Point s{0, 2 * i};
+        const swarmgrid::Point t{4, 2 * i};
+        const swarmgrid::ConstraintTable table(plan.constraints, i);
+        swarmgrid::SearchStats stats;
+        const auto path = swarmgrid::spaceTimeAstar(g, g.toId(s), g.toId(t),
+                                                    swarmgrid::bfsDistances(g, g.toId(t)), table,
+                                                    -1, &stats);
+        if (!path) throw std::logic_error("constraint demo: no path");
+        plan.starts.push_back(s);
+        plan.goals.push_back(t);
+        plan.paths.push_back(*path);
+        plan.expanded.push_back(stats.expanded);
+    }
+    return plan;
+}
+
+// Binary mode: identical bytes (LF line endings) on every OS.
+std::ofstream openOutput(const std::string& path) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) throw std::runtime_error("cannot write " + path);
+    return out;
+}
+
+int runExportPlan(int argc, char** argv) {
+    if (argc < 6) {
+        printUsage();
+        return 1;
+    }
+    const swarmgrid::Grid grid = swarmgrid::loadMovingAIMap(argv[2]);
+    const auto entries = swarmgrid::loadScenario(argv[3]);
+    const int k = parseIntArg(argv[4], "numAgents");
+    const swarmgrid::MapfInstance inst = swarmgrid::makeInstance(grid, entries, k);
+    const std::string mapName = entries.empty() ? std::string("map") : entries.front().mapName;
+    const swarmgrid::PlanExport plan =
+        independentPlan(inst, "export", mapName + ", " + std::to_string(k) + " robots");
+    std::ofstream out = openOutput(argv[5]);
+    swarmgrid::writePlanJson(out, plan);
+    out << '\n';
+    std::cout << "wrote " << argv[5] << '\n';
+    return 0;
+}
+
+// The data file the dashboard (docs/index.html) loads. Regenerate after changing the planner:
+//   swarmgrid export-demos docs/data.js
+int runExportDemos(int argc, char** argv) {
+    if (argc < 3) {
+        printUsage();
+        return 1;
+    }
+    const swarmgrid::Grid warehouse = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
+    const std::vector<swarmgrid::PlanExport> plans = {
+        independentPlan(swarmgrid::generateRandomInstance(warehouse, 10, 42), "warehouse-10",
+                        "Warehouse, 10 robots (seed 42)"),
+        independentPlan(swarmgrid::generateRandomInstance(warehouse, 30, 7), "warehouse-30",
+                        "Warehouse, 30 robots (seed 7)"),
+        constraintsPlan(),
+    };
+    const BenchResult b = computeAstarBench(100, 42);
+
+    std::ofstream out = openOutput(argv[2]);
+    out << "// Generated by `swarmgrid export-demos`. Do not edit by hand.\n"
+        << "window.SWARMGRID_DATA = {\n\"bench\":{\"queries\":" << b.queries
+        << ",\"seed\":" << b.seed << ",\"width\":" << b.width << ",\"height\":" << b.height
+        << ",\"total_moves\":" << b.totalMoves << ",\"expanded_manhattan\":" << b.manExpanded
+        << ",\"expanded_bfs\":" << b.bfsExpanded << ",\"bfs_table_work\":" << b.bfsTableWork
+        << "},\n\"plans\":[\n";
+    for (std::size_t i = 0; i < plans.size(); ++i) {
+        if (i > 0) out << ",\n";
+        swarmgrid::writePlanJson(out, plans[i]);
+    }
+    out << "\n]};\n";
+    std::cout << "wrote " << argv[2] << " (" << plans.size() << " plans)\n";
     return 0;
 }
 
@@ -204,6 +395,9 @@ int main(int argc, char** argv) {
         if (cmd == "warehouse") return runWarehouse(argc, argv);
         if (cmd == "path") return runPath(argc, argv);
         if (cmd == "astar-bench") return runAstarBench(argc, argv);
+        if (cmd == "st-demo") return runSpaceTimeDemo();
+        if (cmd == "export-plan") return runExportPlan(argc, argv);
+        if (cmd == "export-demos") return runExportDemos(argc, argv);
         printUsage();
         return 1;
     } catch (const std::exception& e) {

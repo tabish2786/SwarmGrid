@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="SwarmGrid: multi-agent path finding for a warehouse robot fleet. Live view of the C++ planner's output.">
+<title>SwarmGrid Dashboard</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --text: #161a21;
+    --muted: #5a6272;
+    --border: #e1e5eb;
+    --free: #fbfcfd;
+    --gridline: #e9edf2;
+    --shelf: #3e4757;
+    --accent: #2457d6;
+    --danger: #d92d20;
+    --ok: #12805c;
+    --chip: #eef2f7;
+    --on-accent: #ffffff;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116;
+      --card: #161a22;
+      --text: #e7eaf0;
+      --muted: #9aa3b2;
+      --border: #262c37;
+      --free: #1b2029;
+      --gridline: #242a35;
+      --shelf: #5a6475;
+      --accent: #6b9bff;
+      --danger: #ff6b5e;
+      --ok: #3ccf91;
+      --chip: #222834;
+      --on-accent: #0b1220;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--accent); }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 16px; }
+  @media (max-width: 520px) { .wrap { padding: 10px; } .card { padding: 11px; } }
+
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .top h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+  .top p { margin: 2px 0 0; color: var(--muted); }
+  .gh { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: 1px solid var(--border);
+        border-radius: 999px; background: var(--card); color: var(--text); text-decoration: none; font-weight: 600; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  @media (min-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; } }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .card h2 { margin: 0 0 8px; font-size: 1rem; }
+  .side { display: grid; gap: 14px; }
+
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .toolbar label { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; max-width: 100%; }
+  .toolbar label select { min-width: 0; flex: 1 1 auto; }
+  select, button, .file-btn {
+    font: inherit; color: var(--text); background: var(--chip); border: 1px solid var(--border);
+    border-radius: 10px; min-height: 40px; padding: 6px 12px;
+  }
+  select { max-width: 100%; }
+  button, .file-btn { cursor: pointer; }
+  button:hover, .file-btn:hover { border-color: var(--accent); }
+  button:focus-visible, select:focus-visible, .file-btn:focus-within, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .file-btn { display: inline-flex; align-items: center; font-weight: 600; }
+  .file-btn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .msg { color: var(--danger); margin: 0 0 8px; min-height: 0; }
+  .msg:empty { display: none; }
+
+  .canvas-wrap { width: 100%; display: flex; justify-content: center; border-radius: 10px; overflow: hidden; }
+  canvas { display: block; touch-action: manipulation; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+  .controls .btns { display: flex; gap: 6px; }
+  .controls button { min-width: 44px; font-weight: 700; }
+  #play { min-width: 84px; background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .timeline { flex: 1 1 220px; display: flex; align-items: center; gap: 10px; min-width: 200px; }
+  .timeline input { flex: 1; accent-color: var(--accent); min-height: 32px; }
+  .tlabel { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); min-width: 92px; text-align: right; }
+  .toggles { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; color: var(--muted); }
+  .toggles label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .solver { margin: 10px 0 0; color: var(--muted); font-size: 0.92rem; }
+
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .tile { background: var(--chip); border-radius: 10px; padding: 10px; }
+  .tile .k { color: var(--muted); font-size: 0.82rem; }
+  .tile .v { font-size: 1.45rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .s { color: var(--muted); font-size: 0.78rem; }
+  .tile.bad .v { color: var(--danger); }
+  .tile.good .v { color: var(--ok); }
+
+  .legend { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; color: var(--muted); font-size: 0.9rem; }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .sw { width: 16px; height: 16px; border-radius: 4px; flex: none; display: inline-block; }
+  .sw.shelf { background: var(--shelf); }
+  .sw.robot { background: #2f7de1; border-radius: 50%; }
+  .sw.goal { border: 3px solid #2f7de1; }
+  .sw.hit { border: 3px solid var(--danger); border-radius: 50%; }
+  .sw.rule { background: transparent; color: var(--danger); font-weight: 900; text-align: center; line-height: 16px; }
+
+  .bars { display: grid; gap: 8px; margin: 6px 0 8px; }
+  .bar .lbl { display: flex; justify-content: space-between; font-size: 0.88rem; }
+  .bar .track { height: 10px; background: var(--chip); border-radius: 999px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--accent); border-radius: 999px; }
+  .bar.alt .fill { background: var(--muted); }
+  .small { color: var(--muted); font-size: 0.88rem; margin: 6px 0 0; }
+
+  .ms { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .ms li { display: flex; gap: 8px; align-items: baseline; font-size: 0.92rem; }
+  .chip { font-size: 0.72rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); flex: none; min-width: 58px; text-align: center; }
+  .chip.done { background: var(--chip); background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .chip.next { background: var(--chip); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+
+  footer { color: var(--muted); font-size: 0.85rem; margin: 18px 0 8px; text-align: center; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>SwarmGrid</h1>
+      <p>Multi-agent path finding for a warehouse robot fleet</p>
+    </div>
+    <a class="gh" href="https://github.com/tabish2786/SwarmGrid">Source on GitHub &rarr;</a>
+  </header>
+
+  <main class="layout">
+    <section class="card" aria-label="Plan viewer">
+      <div class="toolbar">
+        <label for="plan-select">Scenario
+          <select id="plan-select"></select>
+        </label>
+        <label class="file-btn" title="Load a plan written by: swarmgrid export-plan ...">
+          Open plan JSON
+          <input type="file" id="file-input" accept=".json,application/json">
+        </label>
+      </div>
+      <p class="msg" id="msg" role="alert"></p>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="map" role="img" aria-label="Warehouse map with robots"></canvas>
+      </div>
+      <div class="controls">
+        <div class="btns">
+          <button id="restart" aria-label="Back to start" title="Back to start">&#x23EE;</button>
+          <button id="back" aria-label="One step back" title="One step back (Left arrow)">&#x25C0;</button>
+          <button id="play" aria-label="Play or pause" title="Play / pause (Space)">Play</button>
+          <button id="fwd" aria-label="One step forward" title="One step forward (Right arrow)">&#x25B6;</button>
+        </div>
+        <div class="timeline">
+          <input type="range" id="time" min="0" max="0" step="1" value="0" aria-label="Timestep">
+          <span class="tlabel" id="time-label">t = 0 / 0</span>
+        </div>
+        <div class="toggles">
+          <label>Speed
+            <select id="speed" aria-label="Playback speed">
+              <option value="1">1 step/s</option>
+              <option value="2">2 steps/s</option>
+              <option value="4" selected>4 steps/s</option>
+              <option value="8">8 steps/s</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="trails" checked> Trails</label>
+          <label><input type="checkbox" id="loop" checked> Loop</label>
+        </div>
+      </div>
+      <p class="solver" id="solver"></p>
+    </section>
+
+    <aside class="side">
+      <section class="card" aria-label="Plan statistics">
+        <h2 id="plan-title">Plan</h2>
+        <div class="tiles">
+          <div class="tile"><div class="k">Robots</div><div class="v" id="st-agents">0</div></div>
+          <div class="tile"><div class="k">Sum of costs</div><div class="v" id="st-soc">0</div><div class="s">total timesteps</div></div>
+          <div class="tile"><div class="k">Makespan</div><div class="v" id="st-mk">0</div><div class="s">last robot arrives</div></div>
+          <div class="tile" id="tile-hit"><div class="k">Collisions</div><div class="v" id="st-hit">0</div><div class="s" id="st-hit-s"></div></div>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Explanation">
+        <h2>What you are seeing</h2>
+        <p id="note" style="margin:0"></p>
+        <ul class="legend">
+          <li><span class="sw shelf"></span>Shelf (robots can't enter)</li>
+          <li><span class="sw robot"></span>Robot, with its number</li>
+          <li><span class="sw goal"></span>That robot's goal</li>
+          <li><span class="sw hit"></span>Collision at this timestep</li>
+          <li><span class="sw rule">&#x2715;</span>Constraint: forbidden cell or move at that time</li>
+        </ul>
+      </section>
+
+      <section class="card" aria-label="A* heuristic benchmark">
+        <h2>A* heuristic check</h2>
+        <div id="bench"></div>
+      </section>
+
+      <section class="card" aria-label="Build progress">
+        <h2>Build progress</h2>
+        <ul class="ms">
+          <li><span class="chip done">done</span>M0 &middot; Grid, MovingAI map loader, warehouse generator</li>
+          <li><span class="chip done">done</span>M1 &middot; A* with BFS true-distance heuristic</li>
+          <li><span class="chip done">done</span>M2 &middot; Space-time A* with vertex/edge constraints</li>
+          <li><span class="chip next">next</span>M3 &middot; Conflict detector and independent validator</li>
+          <li><span class="chip">planned</span>M4 &middot; Conflict-Based Search (collision-free plans)</li>
+          <li><span class="chip">planned</span>M5 &middot; CBS speedups: conflict prioritization, bypass</li>
+          <li><span class="chip">planned</span>M6 &middot; ECBS and prioritized planning for 50+ robots</li>
+          <li><span class="chip">planned</span>M7 &middot; Benchmarks on MovingAI warehouse maps</li>
+          <li><span class="chip">planned</span>M8 &middot; Lifelong mode: continuous orders, replanning</li>
+        </ul>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    Every path here was computed by the C++ planner (<code>swarmgrid export-demos</code>); this page only draws it.
+  </footer>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("map");
+  const ctx = canvas.getContext("2d");
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+  const state = {
+    plans: [],
+    plan: null,       // prepared plan (see prepare())
+    time: 0,          // continuous time; robots are drawn between floor(time) and floor(time)+1
+    playing: false,
+    holdUntil: 0,     // pause briefly at the end before looping
+    lastFrame: 0,
+    cell: 10,
+    mapLayer: null,   // cached drawing of floor + shelves
+  };
+
+  // ---------- data ----------
+
+  function css(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function agentColor(i) {
+    const hue = (i * 137.508 + 210) % 360;  // golden angle: neighbours get far-apart hues
+    return darkQuery.matches ? `hsl(${hue} 75% 62%)` : `hsl(${hue} 70% 44%)`;
+  }
+
+  function isPlan(p) {
+    return p && p.format === "swarmgrid-plan-v1" && p.map && Array.isArray(p.map.rows) &&
+      Number.isInteger(p.map.width) && Number.isInteger(p.map.height) &&
+      p.map.rows.length === p.map.height && p.map.rows.every((r) => typeof r === "string" && r.length === p.map.width) &&
+      Array.isArray(p.agents) && p.agents.every((a) => Array.isArray(a.path) && a.path.length > 0 &&
+        a.path.every((s) => Array.isArray(s) && s.length >= 2 && Number.isInteger(s[0]) && Number.isInteger(s[1])));
+  }
+
+  // Robot position at integer time t. After its path ends a robot stays on its last cell (its
+  // goal), the same convention the planner uses.
+  function posAt(agent, t) {
+    const p = agent.path;
+    const s = p[Math.min(Math.max(t, 0), p.length - 1)];
+    return [s[0], s[1]];
+  }
+
+  // Collisions between the drawn paths, found here in the browser:
+  //   vertex: two robots on one cell at the same time
+  //   target: same, but one of them has already finished and is parked on its goal
+  //   edge:   two robots swap cells between t-1 and t
+  function findCollisions(plan) {
+    const out = [];
+    const n = plan.agents.length;
+    for (let t = 0; t <= plan.makespan; t++) {
+      const byCell = new Map();
+      for (let i = 0; i < n; i++) {
+        const [x, y] = posAt(plan.agents[i], t);
+        const key = y * plan.map.width + x;
+        if (!byCell.has(key)) byCell.set(key, []);
+        byCell.get(key).push(i);
+      }
+      for (const [key, agents] of byCell) {
+        if (agents.length < 2) continue;
+        const parked = agents.some((i) => t >= plan.agents[i].path.length - 1);
+        out.push({ type: parked ? "target" : "vertex", t, agents,
+                   cell: [key % plan.map.width, Math.floor(key / plan.map.width)] });
+      }
+      if (t === 0) continue;
+      const moves = new Map();
+      for (let i = 0; i < n; i++) {
+        const a = posAt(plan.agents[i], t - 1);
+        const b = posAt(plan.agents[i], t);
+        if (a[0] === b[0] && a[1] === b[1]) continue;
+        moves.set(`${a}>${b}`, i);
+      }
+      for (const [k, i] of moves) {
+        const [from, to] = k.split(">");
+        const j = moves.get(`${to}>${from}`);
+        if (j !== undefined && i < j) {
+          out.push({ type: "edge", t, agents: [i, j],
+                     cell: from.split(",").map(Number), to: to.split(",").map(Number) });
+        }
+      }
+    }
+    return out;
+  }
+
+  function prepare(raw) {
+    const plan = raw;
+    plan.makespan = plan.agents.reduce((m, a) => Math.max(m, a.path.length - 1), 0);
+    plan.sumOfCosts = plan.agents.reduce((s, a) => s + a.path.length - 1, 0);
+    plan.collisions = findCollisions(plan);
+    plan.constraints = Array.isArray(plan.constraints) ? plan.constraints : [];
+    return plan;
+  }
+
+  // ---------- drawing ----------
+
+  function layout() {
+    const plan = state.plan;
+    if (!plan) return;
+    const wrap = $("canvas-wrap");
+    const maxW = wrap.clientWidth;
+    const maxH = Math.max(240, Math.min(window.innerHeight * 0.68, 720));
+    const cell = Math.max(4, Math.floor(Math.min(maxW / plan.map.width, maxH / plan.map.height)));
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    state.cell = cell;
+    canvas.style.width = cell * plan.map.width + "px";
+    canvas.style.height = cell * plan.map.height + "px";
+    canvas.width = Math.round(cell * plan.map.width * dpr);
+    canvas.height = Math.round(cell * plan.map.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    buildMapLayer(dpr);
+    draw();
+  }
+
+  function buildMapLayer(dpr) {
+    const plan = state.plan;
+    const c = state.cell;
+    const layer = document.createElement("canvas");
+    layer.width = canvas.width;
+    layer.height = canvas.height;
+    const g = layer.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = css("--free");
+    g.fillRect(0, 0, c * plan.map.width, c * plan.map.height);
+    if (c >= 8) {
+      g.strokeStyle = css("--gridline");
+      g.lineWidth = 1;
+      g.beginPath();
+      for (let x = 0; x <= plan.map.width; x++) { g.moveTo(x * c + 0.5, 0); g.lineTo(x * c + 0.5, plan.map.height * c); }
+      for (let y = 0; y <= plan.map.height; y++) { g.moveTo(0, y * c + 0.5); g.lineTo(plan.map.width * c, y * c + 0.5); }
+      g.stroke();
+    }
+    g.fillStyle = css("--shelf");
+    const r = Math.max(1, c * 0.12);
+    plan.map.rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        if (row[x] === ".") continue;
+        roundRect(g, x * c + 1, y * c + 1, c - 2, c - 2, r);
+        g.fill();
+      }
+    });
+    state.mapLayer = layer;
+  }
+
+  function roundRect(g, x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  function center(p) {
+    const c = state.cell;
+    return [p[0] * c + c / 2, p[1] * c + c / 2];
+  }
+
+  function drawCross(cx, cy, size, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, state.cell * 0.12);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(cx - size, cy - size); ctx.lineTo(cx + size, cy + size);
+    ctx.moveTo(cx + size, cy - size); ctx.lineTo(cx - size, cy + size);
+    ctx.stroke();
+  }
+
+  function draw() {
+    const plan = state.plan;
+    if (!plan || !state.mapLayer) return;
+    const c = state.cell;
+    const W = c * plan.map.width;
+    const H = c * plan.map.height;
+    const tFloor = Math.floor(state.time);
+    const frac = state.time - tFloor;
+    const tNear = Math.round(state.time);
+    const danger = css("--danger");
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(state.mapLayer, 0, 0);
+    ctx.restore();
+
+    // Constraints: faint all the time, strong at the timestep they apply.
+    for (const k of plan.constraints) {
+      const color = danger;
+      if (k.type === "edge" && k.to) {
+        const active = state.time > k.t - 1 && state.time <= k.t;
+        const [x1, y1] = center(k.cell);
+        const [x2, y2] = center(k.to);
+        ctx.globalAlpha = active ? 1 : 0.28;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(2, c * 0.1);
+        ctx.setLineDash([c * 0.18, c * 0.14]);
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        ctx.setLineDash([]);
+        drawCross((x1 + x2) / 2, (y1 + y2) / 2, c * 0.16, color);
+      } else {
+        const active = tNear === k.t;
+        const [x, y] = center(k.cell);
+        ctx.globalAlpha = active ? 1 : 0.28;
+        drawCross(x, y, c * 0.26, color);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Goals.
+    plan.agents.forEach((a, i) => {
+      const goal = a.goal || a.path[a.path.length - 1];
+      const inset = c * 0.14;
+      ctx.strokeStyle = agentColor(i);
+      ctx.lineWidth = Math.max(1.5, c * 0.1);
+      roundRect(ctx, goal[0] * c + inset, goal[1] * c + inset, c - 2 * inset, c - 2 * inset, c * 0.12);
+      ctx.stroke();
+    });
+
+    // Trails: where each robot has been so far.
+    if ($("trails").checked) {
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      plan.agents.forEach((a, i) => {
+        const last = Math.min(tFloor, a.path.length - 1);
+        if (last <= 0 && frac === 0) return;
+        ctx.strokeStyle = agentColor(i);
+        ctx.globalAlpha = 0.38;
+        ctx.lineWidth = Math.max(1.5, c * 0.16);
+        ctx.beginPath();
+        const s = center(posAt(a, 0));
+        ctx.moveTo(s[0], s[1]);
+        for (let t = 1; t <= last; t++) { const p = center(posAt(a, t)); ctx.lineTo(p[0], p[1]); }
+        const p = robotXY(a);
+        ctx.lineTo(p[0], p[1]);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+    }
+
+    // Swaps happening during this step.
+    for (const h of plan.collisions) {
+      if (h.type !== "edge" || !(state.time > h.t - 1 && state.time <= h.t)) continue;
+      const [x1, y1] = center(h.cell);
+      const [x2, y2] = center(h.to);
+      ctx.strokeStyle = danger;
+      ctx.lineWidth = Math.max(3, c * 0.2);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+
+    // Robots.
+    const radius = c * 0.36;
+    plan.agents.forEach((a, i) => {
+      const [x, y] = robotXY(a);
+      ctx.fillStyle = agentColor(i);
+      ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = Math.max(1, c * 0.06);
+      ctx.stroke();
+      if (c >= 15) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `700 ${Math.round(c * (i >= 10 ? 0.34 : 0.42))}px system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(a.id !== undefined ? a.id : i), x, y + 0.5);
+      }
+    });
+
+    // Vertex / target collisions at the nearest whole timestep.
+    if (Math.abs(state.time - tNear) < 0.35) {
+      for (const h of plan.collisions) {
+        if (h.t !== tNear || h.type === "edge") continue;
+        const [x, y] = center(h.cell);
+        ctx.strokeStyle = danger;
+        ctx.lineWidth = Math.max(2.5, c * 0.13);
+        ctx.beginPath(); ctx.arc(x, y, c * 0.52, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    // Constraint times last, on a small pill, so goals and robots never hide them.
+    if (c >= 18) {
+      ctx.font = `700 ${Math.round(c * 0.24)}px system-ui, sans-serif`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      for (const k of plan.constraints) {
+        const label = `t=${k.t}`;
+        const x = k.cell[0] * c + c * 0.05;
+        const y = k.cell[1] * c + c * 0.04;
+        const w = ctx.measureText(label).width + c * 0.1;
+        ctx.globalAlpha = 0.92;
+        ctx.fillStyle = css("--card");
+        roundRect(ctx, x, y, w, c * 0.3, c * 0.08);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = danger;
+        ctx.fillText(label, x + c * 0.05, y + c * 0.03);
+      }
+    }
+
+    $("time").value = String(Math.min(tFloor, plan.makespan));
+    $("time-label").textContent = `t = ${Math.min(tFloor, plan.makespan)} / ${plan.makespan}`;
+  }
+
+  function robotXY(a) {
+    const t0 = Math.floor(state.time);
+    const f = state.time - t0;
+    const p0 = center(posAt(a, t0));
+    const p1 = center(posAt(a, t0 + 1));
+    return [p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f];
+  }
+
+  // ---------- UI ----------
+
+  function showStats() {
+    const p = state.plan;
+    $("plan-title").textContent = p.title || p.id || "Plan";
+    $("st-agents").textContent = p.agents.length;
+    $("st-soc").textContent = p.sumOfCosts;
+    $("st-mk").textContent = p.makespan;
+    const count = (type) => p.collisions.filter((h) => h.type === type).length;
+    $("st-hit").textContent = p.collisions.length;
+    $("st-hit-s").textContent = `${count("vertex")} vertex · ${count("edge")} swap · ${count("target")} target`;
+    $("tile-hit").className = "tile " + (p.collisions.length ? "bad" : "good");
+    $("note").textContent = p.note || "";
+    $("solver").textContent = p.solver ? "Solver: " + p.solver : "";
+    $("time").max = String(p.makespan);
+    canvas.setAttribute("aria-label",
+      `${p.title || "Plan"}: ${p.agents.length} robots on a ${p.map.width} by ${p.map.height} grid, ` +
+      `${p.collisions.length} collisions`);
+  }
+
+  function selectPlan(index) {
+    state.plan = state.plans[index];
+    $("plan-select").value = String(index);
+    state.time = 0;
+    state.holdUntil = 0;
+    showStats();
+    layout();
+  }
+
+  function addPlan(raw, label) {
+    state.plans.push(prepare(raw));
+    const opt = document.createElement("option");
+    opt.value = String(state.plans.length - 1);
+    opt.textContent = label || raw.title || raw.id || `Plan ${state.plans.length}`;
+    $("plan-select").appendChild(opt);
+    return state.plans.length - 1;
+  }
+
+  function setPlaying(on) {
+    state.playing = on;
+    $("play").textContent = on ? "Pause" : "Play";
+    if (on) {
+      if (state.time >= state.plan.makespan) state.time = 0;
+      state.lastFrame = performance.now();
+      requestAnimationFrame(tick);
+    }
+  }
+
+  function step(delta) {
+    setPlaying(false);
+    state.time = Math.max(0, Math.min(state.plan.makespan, Math.round(state.time) + delta));
+    draw();
+  }
+
+  function tick(now) {
+    if (!state.playing) return;
+    const dt = Math.min(0.1, (now - state.lastFrame) / 1000);
+    state.lastFrame = now;
+    if (state.holdUntil) {
+      if (now >= state.holdUntil) { state.holdUntil = 0; state.time = 0; }
+    } else {
+      state.time += dt * Number($("speed").value);
+      if (state.time >= state.plan.makespan) {
+        state.time = state.plan.makespan;
+        if ($("loop").checked) state.holdUntil = now + 1400;
+        else setPlaying(false);
+      }
+    }
+    draw();
+    if (state.playing) requestAnimationFrame(tick);
+  }
+
+  function renderBench(b) {
+    const el = $("bench");
+    if (!b) { el.textContent = "No benchmark data."; return; }
+    const max = Math.max(b.expanded_manhattan, b.expanded_bfs, 1);
+    const pct = ((b.expanded_manhattan - b.expanded_bfs) / b.expanded_manhattan * 100).toFixed(1);
+    const fmt = (v) => v.toLocaleString("en-US");
+    el.innerHTML = "";
+    const intro = document.createElement("p");
+    intro.className = "small";
+    intro.style.marginTop = "0";
+    intro.textContent = `${b.queries} random start/goal queries on the ${b.width} × ${b.height} warehouse (seed ${b.seed}). Nodes A* expanded:`;
+    el.appendChild(intro);
+    const bars = document.createElement("div");
+    bars.className = "bars";
+    for (const [label, value, cls] of [["Manhattan heuristic", b.expanded_manhattan, "alt"], ["BFS heuristic", b.expanded_bfs, ""]]) {
+      const bar = document.createElement("div");
+      bar.className = "bar " + cls;
+      bar.innerHTML = `<div class="lbl"><span></span><b></b></div><div class="track"><div class="fill"></div></div>`;
+      bar.querySelector("span").textContent = label;
+      bar.querySelector("b").textContent = fmt(value);
+      bar.querySelector(".fill").style.width = (value / max * 100).toFixed(1) + "%";
+      bars.appendChild(bar);
+    }
+    el.appendChild(bars);
+    const note = document.createElement("p");
+    note.className = "small";
+    note.textContent = `BFS expands ${pct}% fewer nodes, but building its distance table took ${fmt(b.bfs_table_work)} cell visits. ` +
+      "Every query here has a new goal, so the table costs more than it saves. It pays off when one goal is searched many times, as in CBS.";
+    el.appendChild(note);
+  }
+
+  function showMessage(text) { $("msg").textContent = text; }
+
+  function init() {
+    const data = window.SWARMGRID_DATA;
+    if (!data || !Array.isArray(data.plans) || !data.plans.length) {
+      showMessage("No plan data found. Generate it with: swarmgrid export-demos docs/data.js");
+      return;
+    }
+    for (const p of data.plans) {
+      if (isPlan(p)) addPlan(p);
+    }
+    renderBench(data.bench);
+    if (!state.plans.length) { showMessage("The plan data is not in the expected format."); return; }
+    selectPlan(0);
+
+    $("plan-select").addEventListener("change", (e) => { selectPlan(Number(e.target.value)); });
+    $("play").addEventListener("click", () => setPlaying(!state.playing));
+    $("back").addEventListener("click", () => step(-1));
+    $("fwd").addEventListener("click", () => step(1));
+    $("restart").addEventListener("click", () => { setPlaying(false); state.time = 0; draw(); });
+    $("time").addEventListener("input", (e) => { setPlaying(false); state.time = Number(e.target.value); draw(); });
+    $("trails").addEventListener("change", draw);
+    $("file-input").addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const raw = JSON.parse(String(reader.result));
+          if (!isPlan(raw)) throw new Error("not a swarmgrid-plan-v1 file");
+          showMessage("");
+          selectPlan(addPlan(raw, "File: " + (raw.title || file.name)));
+        } catch (err) {
+          showMessage(`Could not open ${file.name}: ${err.message}`);
+        }
+        e.target.value = "";
+      };
+      reader.readAsText(file);
+    });
+    document.addEventListener("keydown", (e) => {
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.key === " ") { e.preventDefault(); setPlaying(!state.playing); }
+      else if (e.key === "ArrowRight") step(1);
+      else if (e.key === "ArrowLeft") step(-1);
+    });
+    // Re-layout only when the available width changes (our own canvas resize changes the height).
+    let lastWidth = -1;
+    const onResize = () => {
+      const w = $("canvas-wrap").clientWidth;
+      if (w !== lastWidth) { lastWidth = w; layout(); }
+    };
+    if (window.ResizeObserver) new ResizeObserver(onResize).observe($("canvas-wrap"));
+    else window.addEventListener("resize", onResize);
+    const onTheme = () => { buildMapLayer(Math.min(window.devicePixelRatio || 1, 3)); draw(); };
+    if (darkQuery.addEventListener) darkQuery.addEventListener("change", onTheme);
+
+    if (!reduceMotion) setPlaying(true);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
