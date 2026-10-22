@@ -1,0 +1,62 @@
+# SwarmGrid
+
+Multi-Agent Path Finding (MAPF) for a warehouse robot fleet: Conflict-Based Search (CBS),
+ECBS, prioritized planning, and lifelong windowed replanning on 4-connected grids.
+C++17, CMake. The only dependency is vendored [doctest](https://github.com/doctest/doctest) 2.4.11.
+
+> Work in progress. The final README (algorithms, architecture diagram, benchmarks, demo, limitations)
+> gets written at the end, with measured numbers only.
+
+## Build
+
+### Windows: Visual Studio 2022 (MSVC)
+Install Visual Studio 2022 Community with the **Desktop development with C++** workload
+(it ships with CMake). Open **Developer PowerShell for VS 2022**, then:
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+.\build\Release\swarmgrid.exe map data\maps\tiny-8x5.map data\scens\tiny-8x5.scen 3
+```
+
+### Linux / WSL2
+```bash
+sudo apt install build-essential cmake
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSWARMGRID_SANITIZE=ON
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+./build/swarmgrid warehouse 10 42
+```
+
+CMake options: `SWARMGRID_BUILD_TESTS` (ON), `SWARMGRID_WERROR` (OFF), `SWARMGRID_SANITIZE` (OFF, GCC/Clang only).
+
+## Layout
+
+```
+include/swarmgrid/   public headers (one per module)
+src/                 implementations + main.cpp (CLI)
+tests/               doctest unit tests, one file per module
+third_party/doctest/ single-header test framework
+data/maps, data/scens  MovingAI-format maps and scenarios
+```
+
+## Milestones
+
+| #  | Module                                                        | Status |
+|----|---------------------------------------------------------------|--------|
+| M0 | Grid, MovingAI .map/.scen loader, warehouse generator, ASCII  | in progress |
+| M1 | Single-agent A* + BFS true-distance heuristic                 | |
+| M2 | Space-time A* with vertex/edge constraints                    | |
+| M3 | Conflict detector + independent validator                     | |
+| M4 | Optimal CBS                                                   | |
+| M5 | MDD-based conflict prioritization + bypass                    | |
+| M6 | ECBS (focal search) + prioritized planning baseline           | |
+| M7 | Benchmarks on MovingAI warehouse maps                         | |
+| M8 | Lifelong mode: windowed replanning, deadlock recovery         | |
+
+## Data
+
+Benchmark maps and scenarios come from the [MovingAI MAPF benchmark](https://movingai.com/benchmarks/mapf.html).
+`.scen` `optimal_length` values are octile (8-connected) distances, so they do **not** equal
+4-connected shortest paths.

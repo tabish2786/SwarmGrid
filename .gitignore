@@ -1,0 +1,12 @@
+build/
+build-*/
+out/
+.vs/
+.vscode/
+*.user
+CMakeSettings.json
+compile_commands.json
+results/
+*.csv
+!data/**/*.csv
+__pycache__/
