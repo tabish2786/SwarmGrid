@@ -59,3 +59,19 @@ TEST_CASE("ascii: renderAgents") {
     CHECK_THROWS_AS(swarmgrid::renderAgents(g, {{2, 0}}), std::invalid_argument);
     CHECK_THROWS_AS(swarmgrid::renderAgents(g, {{5, 0}}), std::invalid_argument);
 }
+
+TEST_CASE("ascii: renderPath") {
+    const Grid g = tinyGrid();
+    const std::vector<swarmgrid::CellId> path{
+        g.toId(0, 0), g.toId(0, 1), g.toId(0, 2), g.toId(1, 2), g.toId(2, 2),
+        g.toId(3, 2), g.toId(3, 1), g.toId(3, 0), g.toId(4, 0)};
+    CHECK(swarmgrid::renderPath(g, path) ==
+          "S.@+G\n"
+          "+.@+.\n"
+          "++++.\n");
+    CHECK(swarmgrid::renderPath(g, {}) == swarmgrid::renderGrid(g));
+    CHECK(swarmgrid::renderPath(g, {g.toId(1, 1)})[7] == 'G');  // row 1 starts at index 6
+    CHECK_THROWS_AS(swarmgrid::renderPath(g, {g.toId(2, 0)}), std::invalid_argument);
+    CHECK_THROWS_AS(swarmgrid::renderPath(g, {g.numCells()}), std::invalid_argument);
+    CHECK_THROWS_AS(swarmgrid::renderPath(g, {-1}), std::invalid_argument);
+}

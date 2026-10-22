@@ -25,4 +25,9 @@ char agentSymbol(int agentIndex);
 // (that's a bug upstream, fail loudly).
 std::string renderAgents(const Grid& grid, const std::vector<Point>& positions);
 
+// Like renderGrid, but cells on `path` show '+', the first cell 'S' and the last cell 'G'
+// (a one-cell path shows 'G'). Throws std::invalid_argument if a path cell is out of range
+// or an obstacle.
+std::string renderPath(const Grid& grid, const std::vector<CellId>& path);
+
 }  // namespace swarmgrid

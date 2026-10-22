@@ -40,6 +40,8 @@ add_library(swarmgrid_core
   src/map_io.cpp
   src/warehouse_gen.cpp
   src/ascii.cpp
+  src/heuristic.cpp
+  src/astar.cpp
 )
 target_include_directories(swarmgrid_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(swarmgrid_core PRIVATE swarmgrid_warnings)
@@ -57,6 +59,8 @@ if(SWARMGRID_BUILD_TESTS)
     tests/test_map_io.cpp
     tests/test_warehouse_gen.cpp
     tests/test_ascii.cpp
+    tests/test_heuristic.cpp
+    tests/test_astar.cpp
   )
   target_link_libraries(swarmgrid_tests PRIVATE swarmgrid_core swarmgrid_warnings)
   target_include_directories(swarmgrid_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)

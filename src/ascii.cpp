@@ -46,4 +46,24 @@ std::string renderAgents(const Grid& grid, const std::vector<Point>& positions) 
     return out;
 }
 
+std::string renderPath(const Grid& grid, const std::vector<CellId>& path) {
+    std::string out = renderGrid(grid);
+    auto indexOf = [&](CellId c) {
+        if (c < 0 || c >= grid.numCells() || !grid.isFree(c)) {
+            throw std::invalid_argument("renderPath: path cell " + std::to_string(c) +
+                                        " is an obstacle or outside the grid");
+        }
+        const Point p = grid.toPoint(c);
+        return static_cast<std::size_t>(p.y * (grid.width() + 1) + p.x);
+    };
+    for (CellId c : path) {
+        out[indexOf(c)] = '+';
+    }
+    if (!path.empty()) {
+        out[indexOf(path.front())] = 'S';
+        out[indexOf(path.back())] = 'G';
+    }
+    return out;
+}
+
 }  // namespace swarmgrid

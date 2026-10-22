@@ -45,8 +45,8 @@ data/maps, data/scens  MovingAI-format maps and scenarios
 
 | #  | Module                                                        | Status |
 |----|---------------------------------------------------------------|--------|
-| M0 | Grid, MovingAI .map/.scen loader, warehouse generator, ASCII  | in progress |
-| M1 | Single-agent A* + BFS true-distance heuristic                 | |
+| M0 | Grid, MovingAI .map/.scen loader, warehouse generator, ASCII  | done |
+| M1 | Single-agent A* + BFS true-distance heuristic                 | done |
 | M2 | Space-time A* with vertex/edge constraints                    | |
 | M3 | Conflict detector + independent validator                     | |
 | M4 | Optimal CBS                                                   | |
