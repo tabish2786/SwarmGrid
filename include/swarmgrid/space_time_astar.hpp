@@ -15,7 +15,8 @@ namespace swarmgrid {
 // the arrival time T = path.size() - 1. path[t] == path[t+1] means "wait".
 //
 // Goal condition: at the goal at time T with T > constraints.latestVertexConstraintAt(goal).
-// The agent then stays on its goal forever, so no later constraint there may exist.
+// The agent then stays on its goal forever, so no later constraint there may exist; a goal with
+// a BlockedFrom constraint can never be used (returns std::nullopt).
 //
 // h: admissible static heuristic, normally bfsDistances(grid, goal); kUnreachable prunes.
 // OPEN order: smaller f first, then larger t, then smaller cell id. Deterministic.

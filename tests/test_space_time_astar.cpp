@@ -263,3 +263,83 @@ TEST_CASE("space-time: invalid inputs throw") {
     blocked.setObstacle(0, 0, true);
     CHECK_THROWS_AS(swarmgrid::spaceTimeAstar(blocked, 0, 2, h, none), std::invalid_argument);
 }
+
+TEST_CASE("space-time: BlockedFrom constraints") {
+    const Grid g(5, 1);  // S . X . G
+    const CellId s = g.toId(0, 0);
+    const CellId goal = g.toId(4, 0);
+    const CellId x = g.toId(2, 0);
+    const auto h = swarmgrid::bfsDistances(g, goal);
+
+    SUBCASE("blocked after the agent has passed: no effect") {
+        const ConstraintTable ct({swarmgrid::blockedFromConstraint(0, x, 3)}, 0);
+        const auto path = swarmgrid::spaceTimeAstar(g, s, goal, h, ct);
+        REQUIRE(path.has_value());
+        CHECK(*path == cells(g, {0, 1, 2, 3, 4}));
+    }
+    SUBCASE("blocked by the time the agent gets there: the corridor is cut for good") {
+        const ConstraintTable ct({swarmgrid::blockedFromConstraint(0, x, 2)}, 0);
+        CHECK_FALSE(swarmgrid::spaceTimeAstar(g, s, goal, h, ct).has_value());
+    }
+    SUBCASE("a goal that gets blocked forever can never be the goal") {
+        const ConstraintTable ct({swarmgrid::blockedFromConstraint(0, goal, 50)}, 0);
+        SearchStats stats;
+        CHECK_FALSE(swarmgrid::spaceTimeAstar(g, s, goal, h, ct, -1, &stats).has_value());
+        CHECK(stats.expanded == 0);
+    }
+    SUBCASE("the start blocked from t=0") {
+        const ConstraintTable ct({swarmgrid::blockedFromConstraint(0, s, 0)}, 0);
+        CHECK_FALSE(swarmgrid::spaceTimeAstar(g, s, goal, h, ct).has_value());
+    }
+}
+
+TEST_CASE("space-time: optimal vs the reference with BlockedFrom constraints mixed in") {
+    swarmgrid::Rng rng(77);
+    int solved = 0;
+    int infeasible = 0;
+    for (int trial = 0; trial < 300; ++trial) {
+        Grid g(6, 6);
+        for (CellId c = 0; c < g.numCells(); ++c) {
+            if (rng.uniformInt(0, 99) < 15) g.setObstacle(g.toPoint(c).x, g.toPoint(c).y, true);
+        }
+        std::vector<CellId> freeCells;
+        for (CellId c = 0; c < g.numCells(); ++c) {
+            if (g.isFree(c)) freeCells.push_back(c);
+        }
+        if (freeCells.size() < 2) continue;
+        const int last = static_cast<int>(freeCells.size()) - 1;
+        const CellId s = freeCells[static_cast<std::size_t>(rng.uniformInt(0, last))];
+        const CellId goal = freeCells[static_cast<std::size_t>(rng.uniformInt(0, last))];
+        ConstraintTable ct;
+        const int k = rng.uniformInt(0, 10);
+        std::vector<CellId> nb;
+        for (int i = 0; i < k; ++i) {
+            const CellId c = freeCells[static_cast<std::size_t>(rng.uniformInt(0, last))];
+            const int t = rng.uniformInt(1, 10);
+            const int kind = rng.uniformInt(0, 3);
+            g.neighbors(c, nb);
+            if (kind == 0 && c != goal) {
+                ct.add(swarmgrid::blockedFromConstraint(0, c, t));
+            } else if (kind == 1 && !nb.empty()) {
+                const int j = rng.uniformInt(0, static_cast<int>(nb.size()) - 1);
+                ct.add(edgeConstraint(0, c, nb[static_cast<std::size_t>(j)], t));
+            } else {
+                ct.add(vertexConstraint(0, c, t));
+            }
+        }
+        const int horizon = ct.maxTime() + g.numCells();
+        const int expected = referenceArrival(g, s, goal, ct, horizon);
+        const auto path = swarmgrid::spaceTimeAstar(g, s, goal, swarmgrid::bfsDistances(g, goal), ct);
+        if (expected < 0) {
+            CHECK_FALSE(path.has_value());
+            ++infeasible;
+        } else {
+            REQUIRE(path.has_value());
+            CHECK(static_cast<int>(path->size()) - 1 == expected);
+            CHECK(isValidTimedPath(g, *path, s, goal, ct));
+            ++solved;
+        }
+    }
+    CHECK(solved > 150);
+    CHECK(infeasible > 0);
+}

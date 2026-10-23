@@ -25,6 +25,7 @@
 #include "swarmgrid/heuristic.hpp"
 #include "swarmgrid/map_io.hpp"
 #include "swarmgrid/plan_io.hpp"
+#include "swarmgrid/prioritized.hpp"
 #include "swarmgrid/space_time_astar.hpp"
 #include "swarmgrid/warehouse_gen.hpp"
 
@@ -286,6 +287,33 @@ swarmgrid::PlanExport independentPlan(const swarmgrid::MapfInstance& inst, const
     return plan;
 }
 
+// Same instance, planned with prioritized planning: collision-free, slightly longer paths.
+swarmgrid::PlanExport prioritizedPlan(const swarmgrid::MapfInstance& inst, const std::string& id,
+                                      const std::string& title) {
+    std::vector<swarmgrid::CellId> starts;
+    std::vector<swarmgrid::CellId> goals;
+    for (std::size_t i = 0; i < inst.starts.size(); ++i) {
+        starts.push_back(inst.grid.toId(inst.starts[i]));
+        goals.push_back(inst.grid.toId(inst.goals[i]));
+    }
+    const swarmgrid::MultiAgentResult r = swarmgrid::planMultiAgent(
+        inst.grid, starts, goals, swarmgrid::MultiAgentMode::Prioritized);
+    if (!r.solved) throw std::runtime_error("prioritized planning failed for " + id);
+    swarmgrid::PlanExport plan;
+    plan.id = id;
+    plan.title = title;
+    plan.solver = "Prioritized planning: robots planned one by one with space-time A*.";
+    plan.note =
+        "Same robots as the independent plan, but each robot avoids the ones planned before it "
+        "(their cells, their moves, and their parked goals). Zero collisions, at the price of a few "
+        "extra timesteps. Not optimal and can fail on hard instances; CBS (M4) will be optimal.";
+    plan.grid = inst.grid;
+    plan.starts = inst.starts;
+    plan.goals = inst.goals;
+    plan.paths = r.paths;
+    return plan;
+}
+
 // M2 showcase: four robots, each in its own corridor with its own constraints.
 swarmgrid::PlanExport constraintsPlan() {
     swarmgrid::PlanExport plan;
@@ -357,9 +385,11 @@ int runExportDemos(int argc, char** argv) {
         return 1;
     }
     const swarmgrid::Grid warehouse = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
+    const swarmgrid::MapfInstance ten = swarmgrid::generateRandomInstance(warehouse, 10, 42);
     const std::vector<swarmgrid::PlanExport> plans = {
-        independentPlan(swarmgrid::generateRandomInstance(warehouse, 10, 42), "warehouse-10",
-                        "Warehouse, 10 robots (seed 42)"),
+        independentPlan(ten, "warehouse-10", "Warehouse, 10 robots (seed 42)"),
+        prioritizedPlan(ten, "warehouse-10-prioritized",
+                        "Warehouse, 10 robots, collision-free (prioritized)"),
         independentPlan(swarmgrid::generateRandomInstance(warehouse, 30, 7), "warehouse-30",
                         "Warehouse, 30 robots (seed 7)"),
         constraintsPlan(),

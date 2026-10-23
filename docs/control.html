@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Control 10 warehouse robots: pick one, tap where it should go, and the C++ planner (compiled to WebAssembly) replans the whole fleet on your device.">
+<title>SwarmGrid Robot Control</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .robots { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+  @media (max-width: 560px) { .robots { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+  .robot-btn { min-height: 48px; padding: 4px 2px; display: flex; flex-direction: column; align-items: center;
+               justify-content: center; gap: 2px; }
+  .robot-btn .dot { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+                    color: #fff; font-weight: 800; font-size: 0.8rem; }
+  .robot-btn .st { font-size: 0.68rem; color: var(--muted); font-weight: 600; line-height: 1.1; }
+  .robot-btn[aria-pressed="true"] { border-color: var(--text); box-shadow: inset 0 0 0 2px var(--text); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; max-width: 100%; }
+  .seg button { border: 0; border-radius: 0; background: var(--chip); font-weight: 600; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+  #map { cursor: crosshair; }
+  .toolbar label[for="planner"] { flex: 1 1 260px; flex-wrap: wrap; }
+  .hint { margin: 0 0 8px; color: var(--muted); font-size: 0.92rem; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+  .sel-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: -1px; margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Robot control</h1>
+      <p>Pick a robot, tap where it should go. The whole fleet replans instantly.</p>
+    </div>
+    <nav class="top-links">
+      <a class="gh" href="index.html">&larr; Dashboard</a>
+      <a class="gh" href="https://github.com/tabish2786/SwarmGrid">Source on GitHub</a>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="card" aria-label="Robot control">
+      <div class="robots" id="robots" role="group" aria-label="Choose a robot"></div>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="What a tap on the map does">
+          <button id="mode-goal" aria-pressed="true">Tap = send here</button>
+          <button id="mode-start" aria-pressed="false">Tap = place robot</button>
+        </div>
+        <label for="planner">Planner
+          <select id="planner">
+            <option value="1" selected>Prioritized (no collisions)</option>
+            <option value="0">Independent A* (may collide)</option>
+          </select>
+        </label>
+      </div>
+      <p class="msg" id="msg" role="alert"></p>
+      <p class="hint" id="hint" aria-live="polite"></p>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="map" role="img" aria-label="Warehouse map with 10 robots"></canvas>
+      </div>
+      <div class="controls">
+        <div class="btns">
+          <button id="restart" aria-label="Replay this plan from the start" title="Replay from the start">&#x23EE;</button>
+          <button id="play" aria-label="Play or pause" title="Play / pause (Space)">Play</button>
+        </div>
+        <div class="timeline">
+          <input type="range" id="time" min="0" max="0" step="1" value="0" aria-label="Timestep">
+          <span class="tlabel" id="time-label">t = 0 / 0</span>
+        </div>
+        <div class="toggles">
+          <label>Speed
+            <select id="speed" aria-label="Playback speed">
+              <option value="2">2 steps/s</option>
+              <option value="4" selected>4 steps/s</option>
+              <option value="8">8 steps/s</option>
+            </select>
+          </label>
+          <label><input type="checkbox" id="trails" checked> Trails</label>
+          <button id="shuffle">Shuffle robots</button>
+        </div>
+      </div>
+      <p class="solver" id="status">Loading the planner&hellip;</p>
+    </section>
+
+    <aside class="side">
+      <section class="card" aria-label="Plan statistics">
+        <h2>Current plan</h2>
+        <div class="tiles">
+          <div class="tile"><div class="k">Sum of costs</div><div class="v" id="st-soc">&ndash;</div><div class="s">total timesteps</div></div>
+          <div class="tile"><div class="k">Makespan</div><div class="v" id="st-mk">&ndash;</div><div class="s">last robot arrives</div></div>
+          <div class="tile" id="tile-hit"><div class="k">Collisions</div><div class="v" id="st-hit">&ndash;</div><div class="s" id="st-hit-s"></div></div>
+          <div class="tile"><div class="k">Planning time</div><div class="v" id="st-ms">&ndash;</div><div class="s" id="st-ms-s">on this device</div></div>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Selected robot">
+        <h2 id="sel-title">Robot</h2>
+        <dl class="kv">
+          <dt>Now at</dt><dd id="sel-now">&ndash;</dd>
+          <dt>Goal</dt><dd id="sel-goal">&ndash;</dd>
+          <dt>Arrives at</dt><dd id="sel-arrive">&ndash;</dd>
+          <dt>Waits</dt><dd id="sel-waits">&ndash;</dd>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>How to use</h2>
+        <ol class="steps">
+          <li>Pick a robot above (or tap it on the map, or press 0&ndash;9).</li>
+          <li>Tap any free cell: the robot drives there. Everyone else replans around it.</li>
+          <li>Switch to <b>Tap = place robot</b> to put it somewhere else first.</li>
+          <li>Switch the planner to <b>Independent A*</b> to see what happens without coordination.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2>How it works</h2>
+        <p style="margin:0">
+          Every tap reruns the project's C++ planner, compiled to WebAssembly, on your device.
+          <b>Prioritized planning</b> plans robots one by one with space-time A*; each robot avoids
+          the ones planned before it, including robots parked on their goals. It is fast but not
+          optimal, and it can fail on a solvable layout. When it does, the page keeps the old plan
+          and tells you which robot got stuck. Conflict-Based Search (milestone M4) will be optimal.
+        </p>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    Planner: the project's C++17 code compiled to WebAssembly (<code>web/build_wasm.sh</code>). It runs in your browser; nothing is sent anywhere.
+  </footer>
+</div>
+
+<script src="view.js"></script>
+<script src="swarmgrid-planner.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const V = window.SwarmGridView;
+  const N = 10;
+  const view = new V.PlanView($("map"));
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const state = {
+    M: null,          // the WebAssembly planner
+    W: 0,
+    H: 0,
+    rows: [],
+    starts: [],       // cell ids where the current plan starts
+    goals: [],
+    plan: null,
+    time: 0,
+    playing: false,
+    lastFrame: 0,
+    selected: 0,
+    tapMode: "goal",  // "goal": a tap sends the robot there; "start": a tap places the robot there
+    seed: 42,
+    lastShownT: -1,
+  };
+
+  const toXY = (c) => [c % state.W, Math.floor(c / state.W)];
+  const toId = (x, y) => y * state.W + x;
+  const fmtXY = (c) => { const [x, y] = toXY(c); return `(${x}, ${y})`; };
+
+  function setMessage(text) { $("msg").textContent = text; }
+
+  // ---------- planner ----------
+
+  function plannerName() {
+    return Number($("planner").value) === 1 ? "prioritized planning" : "independent A*";
+  }
+
+  // Runs the C++ planner on the given starts/goals.
+  function runPlanner(starts, goals) {
+    const M = state.M;
+    M._sg_clear_agents();
+    for (let i = 0; i < N; i++) M._sg_add_agent(starts[i], goals[i]);
+    const t0 = performance.now();
+    const status = M._sg_plan(Number($("planner").value));
+    let paths = null;
+    if (status === 1) {
+      paths = [];
+      for (let i = 0; i < N; i++) {
+        const len = M._sg_path_length(i);
+        const p = [];
+        for (let t = 0; t < len; t++) {
+          const [x, y] = toXY(M._sg_path_cell(i, t));
+          p.push([x, y, t]);
+        }
+        paths.push(p);
+      }
+    }
+    return {
+      status, paths, ms: performance.now() - t0,
+      attempts: M._sg_attempts(), failed: M._sg_failed_agent(),
+      error: status < 0 ? M.UTF8ToString(M._sg_last_error()) : "",
+    };
+  }
+
+  // Plans new starts/goals. On failure the previous plan stays, so the robots never jump.
+  function tryReplan(starts, goals) {
+    const res = runPlanner(starts, goals);
+    if (res.status !== 1) {
+      setMessage(res.status === 0
+        ? `No collision-free plan for that: robot ${res.failed} got stuck. Prioritized planning can miss solutions; try another cell.`
+        : `Planner error: ${res.error}`);
+      return false;
+    }
+    setMessage("");
+    state.starts = starts;
+    state.goals = goals;
+    state.plan = V.prepare({
+      map: { width: state.W, height: state.H, rows: state.rows },
+      agents: res.paths.map((path, i) => ({ id: i, start: toXY(starts[i]), goal: toXY(goals[i]), path })),
+      constraints: [],
+    });
+    view.setPlan(state.plan);
+    state.time = 0;
+    state.lastShownT = -1;
+    showStats(res);
+    layout();
+    return true;
+  }
+
+  // Where every robot is right now (nearest whole timestep). The independent planner lets robots
+  // overlap; then there is no valid "now", so we fall back to where the plan started.
+  function currentPositions() {
+    if (!state.plan) return state.starts.slice();
+    const t = Math.round(state.time);
+    const pos = state.plan.agents.map((a) => { const [x, y] = V.posAt(a, t); return toId(x, y); });
+    return new Set(pos).size === pos.length ? pos : state.starts.slice();
+  }
+
+  // ---------- UI ----------
+
+  function buildRobotButtons() {
+    const box = $("robots");
+    for (let i = 0; i < N; i++) {
+      const b = document.createElement("button");
+      b.className = "robot-btn";
+      b.id = `robot-${i}`;
+      b.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-label", `Robot ${i}`);
+      b.innerHTML = `<span class="dot"></span><span class="st"></span>`;
+      b.querySelector(".dot").textContent = String(i);
+      b.querySelector(".dot").style.background = V.agentColor(i);
+      b.addEventListener("click", () => select(i));
+      box.appendChild(b);
+    }
+  }
+
+  function select(i) {
+    state.selected = i;
+    for (let k = 0; k < N; k++) $(`robot-${k}`).setAttribute("aria-pressed", String(k === i));
+    showHint();
+    state.lastShownT = -1;
+    draw();
+  }
+
+  function setTapMode(mode) {
+    state.tapMode = mode;
+    $("mode-goal").setAttribute("aria-pressed", String(mode === "goal"));
+    $("mode-start").setAttribute("aria-pressed", String(mode === "start"));
+    showHint();
+  }
+
+  function showHint() {
+    $("hint").textContent = state.tapMode === "goal"
+      ? `Robot ${state.selected} selected. Tap a free cell to send it there.`
+      : `Robot ${state.selected} selected. Tap a free cell to place it there.`;
+  }
+
+  function showStats(res) {
+    const p = state.plan;
+    $("st-soc").textContent = p.sumOfCosts;
+    $("st-mk").textContent = p.makespan;
+    const count = (type) => p.collisions.filter((h) => h.type === type).length;
+    $("st-hit").textContent = p.collisions.length;
+    $("st-hit-s").textContent = `${count("vertex")} vertex · ${count("edge")} swap · ${count("target")} target`;
+    $("tile-hit").className = "tile " + (p.collisions.length ? "bad" : "good");
+    $("st-ms").textContent = res.ms < 10 ? res.ms.toFixed(1) + " ms" : Math.round(res.ms) + " ms";
+    $("st-ms-s").textContent = Number($("planner").value) === 1
+      ? `on this device · ${res.attempts} priority order${res.attempts === 1 ? "" : "s"} tried`
+      : "on this device";
+    $("time").max = String(p.makespan);
+    $("status").textContent = `Planner: C++ compiled to WebAssembly · ${plannerName()} · ${N} robots`;
+    $("map").setAttribute("aria-label", `Warehouse with ${N} robots, ${p.collisions.length} collisions in the current plan`);
+  }
+
+  // Robot chip labels and the selected-robot card; refreshed once per whole timestep.
+  function showLive() {
+    const p = state.plan;
+    const t = Math.min(Math.floor(state.time), p.makespan);
+    if (t === state.lastShownT) return;
+    state.lastShownT = t;
+    p.agents.forEach((a, i) => {
+      const arrive = a.path.length - 1;
+      $(`robot-${i}`).querySelector(".st").textContent = t >= arrive ? "arrived" : `${arrive - t} to go`;
+    });
+    const i = state.selected;
+    const a = p.agents[i];
+    const arrive = a.path.length - 1;
+    let waits = 0;
+    for (let k = 1; k <= arrive; k++) {
+      if (a.path[k][0] === a.path[k - 1][0] && a.path[k][1] === a.path[k - 1][1]) waits++;
+    }
+    const [x, y] = V.posAt(a, t);
+    $("sel-title").innerHTML = `<span class="sel-dot"></span>Robot ${i}`;
+    $("sel-title").querySelector(".sel-dot").style.background = V.agentColor(i);
+    $("sel-now").textContent = `(${x}, ${y})`;
+    $("sel-goal").textContent = fmtXY(state.goals[i]);
+    $("sel-arrive").textContent = `t = ${arrive}`;
+    $("sel-waits").textContent = waits === 0 ? "none" : `${waits} step${waits === 1 ? "" : "s"}`;
+  }
+
+  function layout() {
+    if (!state.plan) return;
+    const maxH = Math.max(240, Math.min(window.innerHeight * 0.66, 720));
+    view.resize($("canvas-wrap").clientWidth, maxH);
+    draw();
+  }
+
+  function draw() {
+    const p = state.plan;
+    if (!p) return;
+    view.draw(state.time, { trails: $("trails").checked, selected: state.selected });
+    const t = Math.min(Math.floor(state.time), p.makespan);
+    $("time").value = String(t);
+    $("time-label").textContent = `t = ${t} / ${p.makespan}`;
+    showLive();
+  }
+
+  function setPlaying(on) {
+    state.playing = on;
+    $("play").textContent = on ? "Pause" : "Play";
+    if (on) {
+      if (state.time >= state.plan.makespan) state.time = 0;
+      state.lastFrame = performance.now();
+      requestAnimationFrame(tick);
+    }
+  }
+
+  function tick(now) {
+    if (!state.playing) return;
+    const dt = Math.min(0.1, (now - state.lastFrame) / 1000);
+    state.lastFrame = now;
+    state.time += dt * Number($("speed").value);
+    if (state.time >= state.plan.makespan) {
+      state.time = state.plan.makespan;
+      setPlaying(false);  // everyone has arrived; the next tap plans from here
+    }
+    draw();
+    if (state.playing) requestAnimationFrame(tick);
+  }
+
+  function onMapTap(ev) {
+    const cell = view.cellAt(ev.clientX, ev.clientY);
+    if (!cell || !state.plan) return;
+    const id = toId(cell[0], cell[1]);
+    const sel = state.selected;
+    if (!state.M._sg_is_free(id)) { setMessage("That's a shelf. Robots can only use the aisles."); return; }
+    const now = currentPositions();
+    const robotHere = now.indexOf(id);
+    if (robotHere >= 0 && robotHere !== sel) { select(robotHere); setMessage(""); return; }
+    if (state.tapMode === "goal") {
+      const owner = state.goals.indexOf(id);
+      if (owner >= 0 && owner !== sel) {
+        setMessage(`That cell is robot ${owner}'s goal. Every robot needs its own goal.`);
+        return;
+      }
+      const goals = state.goals.slice();
+      goals[sel] = id;
+      if (tryReplan(now, goals)) setPlaying(true);
+    } else {
+      if (robotHere === sel) return;
+      const starts = now.slice();
+      starts[sel] = id;
+      if (tryReplan(starts, state.goals.slice())) setPlaying(true);
+    }
+  }
+
+  // A fresh random scene. Prioritized planning can fail on one, so try a few seeds.
+  function shuffle() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      state.seed += 1;
+      if (state.M._sg_random_agents(N, state.seed) !== N) continue;
+      const starts = [];
+      const goals = [];
+      for (let i = 0; i < N; i++) { starts.push(state.M._sg_agent_start(i)); goals.push(state.M._sg_agent_goal(i)); }
+      if (tryReplan(starts, goals)) { setPlaying(true); return; }
+    }
+  }
+
+  function start(M) {
+    state.M = M;
+    state.W = M._sg_width();
+    state.H = M._sg_height();
+    state.rows = [];
+    for (let y = 0; y < state.H; y++) {
+      let row = "";
+      for (let x = 0; x < state.W; x++) row += M._sg_is_free(toId(x, y)) ? "." : "@";
+      state.rows.push(row);
+    }
+    M._sg_random_agents(N, state.seed);  // the same 10 robots as the dashboard's demo scene
+    const starts = [];
+    const goals = [];
+    for (let i = 0; i < N; i++) { starts.push(M._sg_agent_start(i)); goals.push(M._sg_agent_goal(i)); }
+    buildRobotButtons();
+    select(0);
+    if (!tryReplan(starts, goals)) return;
+
+    $("map").addEventListener("click", onMapTap);
+    $("mode-goal").addEventListener("click", () => setTapMode("goal"));
+    $("mode-start").addEventListener("click", () => setTapMode("start"));
+    $("planner").addEventListener("change", () => { if (tryReplan(currentPositions(), state.goals.slice())) setPlaying(true); });
+    $("play").addEventListener("click", () => setPlaying(!state.playing));
+    $("restart").addEventListener("click", () => { state.time = 0; setPlaying(true); });
+    $("time").addEventListener("input", (e) => { setPlaying(false); state.time = Number(e.target.value); draw(); });
+    $("trails").addEventListener("change", draw);
+    $("shuffle").addEventListener("click", shuffle);
+    document.addEventListener("keydown", (e) => {
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.key === " ") { e.preventDefault(); setPlaying(!state.playing); }
+      else if (/^[0-9]$/.test(e.key)) select(Number(e.key));
+    });
+    let lastWidth = -1;
+    const onResize = () => {
+      const w = $("canvas-wrap").clientWidth;
+      if (w !== lastWidth) { lastWidth = w; layout(); }
+    };
+    if (window.ResizeObserver) new ResizeObserver(onResize).observe($("canvas-wrap"));
+    else window.addEventListener("resize", onResize);
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", draw);
+
+    showHint();
+    if (!reduceMotion) setPlaying(true);
+  }
+
+  if (typeof window.createSwarmGridPlanner !== "function") {
+    $("status").textContent = "Could not load the planner (swarmgrid-planner.js).";
+    return;
+  }
+  window.createSwarmGridPlanner().then(start).catch((err) => {
+    $("status").textContent = "The planner failed to start: " + err;
+  });
+})();
+</script>
+</body>
+</html>

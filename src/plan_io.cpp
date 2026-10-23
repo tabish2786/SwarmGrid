@@ -71,6 +71,14 @@ void writePlanJson(std::ostream& out, const PlanExport& plan) {
         requireInside(g, c.from, "a constraint cell");
         if (c.type == ConstraintType::Edge) requireInside(g, c.to, "a constraint cell");
     }
+    auto typeName = [](ConstraintType type) {
+        switch (type) {
+            case ConstraintType::Vertex: return "vertex";
+            case ConstraintType::Edge: return "edge";
+            case ConstraintType::BlockedFrom: return "blocked_from";
+        }
+        return "unknown";
+    };
 
     out << "{\"format\":\"swarmgrid-plan-v1\",\"id\":\"" << jsonEscape(plan.id) << "\",\"title\":\""
         << jsonEscape(plan.title) << "\",\"solver\":\"" << jsonEscape(plan.solver)
@@ -109,7 +117,7 @@ void writePlanJson(std::ostream& out, const PlanExport& plan) {
     for (std::size_t i = 0; i < plan.constraints.size(); ++i) {
         const Constraint& c = plan.constraints[i];
         out << (i > 0 ? "," : "") << "\n  {\"agent\":" << c.agent << ",\"type\":\""
-            << (c.type == ConstraintType::Vertex ? "vertex" : "edge") << "\",\"cell\":";
+            << typeName(c.type) << "\",\"cell\":";
         writeXY(out, g.toPoint(c.from));
         if (c.type == ConstraintType::Edge) {
             out << ",\"to\":";

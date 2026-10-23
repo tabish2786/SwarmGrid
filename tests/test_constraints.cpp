@@ -122,3 +122,26 @@ TEST_CASE("constraint table: many keys, no false positives") {
         }
     }
 }
+
+TEST_CASE("constraint table: BlockedFrom blocks a cell forever from its start time") {
+    ConstraintTable table;
+    CHECK_THROWS_AS(swarmgrid::blockedFromConstraint(0, -1, 3), std::invalid_argument);
+    CHECK_THROWS_AS(swarmgrid::blockedFromConstraint(0, 4, -1), std::invalid_argument);
+
+    table.add(swarmgrid::blockedFromConstraint(0, 4, 6));
+    CHECK_FALSE(table.vertexBlocked(4, 5));
+    CHECK(table.vertexBlocked(4, 6));
+    CHECK(table.vertexBlocked(4, 1000000));
+    CHECK_FALSE(table.vertexBlocked(5, 1000000));
+    CHECK(table.blockedFromAt(4) == 6);
+    CHECK(table.blockedFromAt(5) == -1);
+    CHECK(table.latestVertexConstraintAt(4) == -1);  // reported separately from vertex constraints
+    CHECK(table.maxTime() == 6);
+
+    table.add(swarmgrid::blockedFromConstraint(0, 4, 9));  // a later block changes nothing
+    CHECK(table.blockedFromAt(4) == 6);
+    table.add(swarmgrid::blockedFromConstraint(0, 4, 2));  // an earlier one wins
+    CHECK(table.blockedFromAt(4) == 2);
+    CHECK(table.vertexBlocked(4, 2));
+    CHECK(table.maxTime() == 9);
+}

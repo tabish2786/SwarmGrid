@@ -29,7 +29,8 @@ struct PlanExport {
 //     "map": { "width", "height", "rows": ["..@..", ...] },          '.' free, '@' obstacle
 //     "agents": [ { "id", "start": [x,y], "goal": [x,y], "cost", "expanded",
 //                   "path": [[x,y,t], ...] } ],                       "expanded" only if known
-//     "constraints": [ { "agent", "type": "vertex"|"edge", "cell": [x,y], "to": [x,y], "t" } ],
+//     "constraints": [ { "agent", "type": "vertex"|"edge"|"blocked_from", "cell": [x,y],
+//                        "to": [x,y] (edge only), "t" } ],
 //     "stats": { "agents", "sum_of_costs", "makespan" } }
 // cost = path.size() - 1 (arrival time); sum_of_costs and makespan follow from it.
 // Output is deterministic (fixed field order, no floating point).

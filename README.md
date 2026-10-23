@@ -25,6 +25,25 @@ where they would collide.
 - Hosting: GitHub Pages serves the `docs/` folder of `main`
   (Settings → Pages → Deploy from a branch → `main` / `docs`).
 
+### Robot control (interactive)
+
+**https://tabish2786.github.io/SwarmGrid/control.html**: pick any of 10 robots, tap where it
+should go (or where it should stand), and the whole fleet replans from where it is right now.
+
+The planner on that page is this repo's C++ code compiled to WebAssembly, so it runs on the
+visitor's device and gives exactly the native results (checked path by path against the native
+build). It uses prioritized planning (fast, collision-free, not optimal, can fail; CBS in M4 will
+be optimal), or independent A* to show the collisions you get without coordination.
+
+- Page: `docs/control.html`; shared drawing code `docs/view.js`, shared styles `docs/style.css`
+- C interface for the browser: `web/wasm_api.cpp`
+- `docs/swarmgrid-planner.js` is generated. Rebuild it after changing the planner (needs
+  [Emscripten](https://emscripten.org), tested with 3.1.74):
+  ```
+  source /path/to/emsdk/emsdk_env.sh
+  ./web/build_wasm.sh
+  ```
+
 ## Build
 
 ### Windows: Visual Studio 2022 (MSVC)
@@ -55,7 +74,8 @@ CMake options: `SWARMGRID_BUILD_TESTS` (ON), `SWARMGRID_WERROR` (OFF), `SWARMGRI
 include/swarmgrid/   public headers (one per module)
 src/                 implementations + main.cpp (CLI)
 tests/               doctest unit tests, one file per module
-docs/                web dashboard (GitHub Pages)
+docs/                web dashboard + robot control page (GitHub Pages)
+web/                 WebAssembly interface + build script for the control page
 third_party/doctest/ single-header test framework
 data/maps, data/scens  MovingAI-format maps and scenarios
 ```
@@ -70,7 +90,7 @@ data/maps, data/scens  MovingAI-format maps and scenarios
 | M3 | Conflict detector + independent validator                     | |
 | M4 | Optimal CBS                                                   | |
 | M5 | MDD-based conflict prioritization + bypass                    | |
-| M6 | ECBS (focal search) + prioritized planning baseline           | |
+| M6 | ECBS (focal search) + prioritized planning baseline           | baseline done |
 | M7 | Benchmarks on MovingAI warehouse maps                         | |
 | M8 | Lifelong mode: windowed replanning, deadlock recovery         | |
 

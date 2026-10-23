@@ -66,12 +66,15 @@ TEST_CASE("plan_io: edge constraints, no expansions, several agents") {
     p.starts.push_back({0, 1});
     p.goals.push_back({0, 1});
     p.paths.push_back({p.grid.toId(0, 1)});
-    p.constraints = {swarmgrid::edgeConstraint(1, p.grid.toId(0, 1), p.grid.toId(1, 1), 2)};
+    p.constraints = {swarmgrid::edgeConstraint(1, p.grid.toId(0, 1), p.grid.toId(1, 1), 2),
+                     swarmgrid::blockedFromConstraint(0, p.grid.toId(2, 0), 5)};
     const std::string json = toJson(p);
     CHECK(json.find("\"expanded\"") == std::string::npos);
     CHECK(json.find("{\"id\":1,\"start\":[0,1],\"goal\":[0,1],\"cost\":0,\"path\":[[0,1,0]]}") !=
           std::string::npos);
     CHECK(json.find("{\"agent\":1,\"type\":\"edge\",\"cell\":[0,1],\"to\":[1,1],\"t\":2}") !=
+          std::string::npos);
+    CHECK(json.find("{\"agent\":0,\"type\":\"blocked_from\",\"cell\":[2,0],\"t\":5}") !=
           std::string::npos);
     CHECK(json.find("\"stats\":{\"agents\":2,\"sum_of_costs\":5,\"makespan\":5}") !=
           std::string::npos);

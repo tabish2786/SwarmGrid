@@ -70,8 +70,9 @@ std::optional<Path> spaceTimeAstar(const Grid& grid, CellId start, CellId goal,
     s = SearchStats{};
 
     // Automatic horizon. If any valid path exists, one exists that arrives by
-    // maxTime + numCells: follow it until time maxTime + 1 (or until it finishes), after which
-    // no constraint applies any more, then take a static shortest path (< numCells moves).
+    // maxTime + numCells: follow it until time maxTime + 1 (or until it finishes). From then on
+    // nothing changes any more (only BlockedFrom cells stay blocked, and they are now fixed), so
+    // a static shortest path around them takes < numCells moves.
     const int limit = horizon >= 0 ? horizon : constraints.maxTime() + n;
 
     // The earliest time the agent may finish. Using it in f keeps f admissible (the arrival
@@ -80,7 +81,8 @@ std::optional<Path> spaceTimeAstar(const Grid& grid, CellId start, CellId goal,
     auto fValue = [&](CellId c, int t) { return std::max(t + h[c], earliestFinish); };
 
     if (h[start] == kUnreachable || constraints.vertexBlocked(start, 0) ||
-        fValue(start, 0) > limit) {
+        constraints.blockedFromAt(goal) >= 0 || fValue(start, 0) > limit) {
+        // (a goal that gets blocked forever can never be the place the agent stays)
         return std::nullopt;
     }
 

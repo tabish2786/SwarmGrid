@@ -33,6 +33,19 @@ Constraint edgeConstraint(int agent, CellId from, CellId to, int t) {
     return c;
 }
 
+Constraint blockedFromConstraint(int agent, CellId cell, int t) {
+    if (cell < 0 || t < 0) {
+        throw std::invalid_argument("blockedFromConstraint: need cell >= 0 and t >= 0");
+    }
+    Constraint c;
+    c.type = ConstraintType::BlockedFrom;
+    c.agent = agent;
+    c.from = cell;
+    c.to = kInvalidCell;
+    c.t = t;
+    return c;
+}
+
 ConstraintTable::ConstraintTable(const std::vector<Constraint>& constraints, int agent) {
     for (const Constraint& c : constraints) {
         if (c.agent == agent) {
@@ -52,9 +65,17 @@ void ConstraintTable::add(const Constraint& c) {
         } else {
             it->second = std::max(it->second, v.t);
         }
-    } else {
+    } else if (c.type == ConstraintType::Edge) {
         const Constraint e = edgeConstraint(c.agent, c.from, c.to, c.t);
         edge_.insert(EdgeKey{e.from, e.to, e.t});
+    } else {
+        const Constraint b = blockedFromConstraint(c.agent, c.from, c.t);
+        auto it = blockedFrom_.find(b.from);
+        if (it == blockedFrom_.end()) {
+            blockedFrom_.emplace(b.from, b.t);
+        } else {
+            it->second = std::min(it->second, b.t);  // the earliest block wins
+        }
     }
     maxTime_ = std::max(maxTime_, c.t);
 }
@@ -62,6 +83,10 @@ void ConstraintTable::add(const Constraint& c) {
 bool ConstraintTable::vertexBlocked(CellId cell, int t) const {
     if (cell < 0 || t < 0) {
         return false;  // no constraint can exist there (add() rejects such constraints)
+    }
+    const auto it = blockedFrom_.find(cell);
+    if (it != blockedFrom_.end() && t >= it->second) {
+        return true;
     }
     return vertex_.count(vertexKey(cell, t)) > 0;
 }
@@ -73,6 +98,11 @@ bool ConstraintTable::edgeBlocked(CellId from, CellId to, int t) const {
 int ConstraintTable::latestVertexConstraintAt(CellId cell) const {
     const auto it = latestVertex_.find(cell);
     return it == latestVertex_.end() ? -1 : it->second;
+}
+
+int ConstraintTable::blockedFromAt(CellId cell) const {
+    const auto it = blockedFrom_.find(cell);
+    return it == blockedFrom_.end() ? -1 : it->second;
 }
 
 std::uint64_t ConstraintTable::vertexKey(CellId cell, int t) {
