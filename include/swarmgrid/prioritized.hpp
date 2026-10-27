@@ -31,10 +31,13 @@ struct MultiAgentResult {
 };
 
 // Plans starts[i] -> goals[i] for every agent i. Deterministic.
+// window >= 0 (M8 rolling horizon, Prioritized only): reservations stop at time `window`, so the
+// paths are collision-free up to then; a robot parked before the window end is reserved on its
+// goal only until then. -1 = whole paths.
 // Throws std::invalid_argument if sizes differ, there are no agents, maxAttempts < 1, or any
 // start/goal is not a free cell, or two agents share a start or a goal.
 MultiAgentResult planMultiAgent(const Grid& grid, const std::vector<CellId>& starts,
                                 const std::vector<CellId>& goals, MultiAgentMode mode,
-                                int maxAttempts = 10);
+                                int maxAttempts = 10, int window = -1);
 
 }  // namespace swarmgrid

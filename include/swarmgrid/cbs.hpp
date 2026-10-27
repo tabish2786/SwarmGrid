@@ -19,9 +19,26 @@ namespace swarmgrid {
 //      goal condition of space-time A*.)
 //   Edge (a1: cell->to, a2: to->cell, t): child 1 forbids a1's move, child 2 forbids a2's move.
 // OPEN order: smaller sum-of-costs, then fewer conflicts, then older node. Deterministic.
+//
+// M5 (Boyarski et al., 2015, "ICBS"), both on by default and both keep CBS optimal:
+//   prioritizeConflicts: classify every conflict of the node with MDDs (mdd.hpp). A conflict is
+//     cardinal if BOTH children must get more expensive (each agent's optimal paths all use the
+//     conflicting cell/move), semi-cardinal if one must, non-cardinal otherwise. Branch on the
+//     first cardinal, else the first semi-cardinal, else the first conflict. Splitting on a
+//     cardinal conflict raises the lower bound right away instead of growing a wide tree of
+//     equal-cost nodes.
+//   bypass: if a child has the parent's cost and fewer conflicts, take its new path into the
+//     parent and put the parent back in OPEN instead of adding two children.
+// With both off this is the plain CBS of M4 (the tests pin its node counts).
 struct CbsOptions {
     int maxNodes = 100000;          // CT nodes to expand before giving up
     double timeLimitSeconds = 0.0;  // wall-clock limit; 0 = none (results then depend only on input)
+    bool prioritizeConflicts = true;
+    bool bypass = true;
+    // M8 rolling horizon: if >= 0, only conflicts at t <= window are resolved (the plan is
+    // collision-free up to then and each robot simply drives its shortest way after it).
+    // Optimality then refers to that relaxed problem. -1 = whole paths (normal MAPF).
+    int window = -1;
 };
 
 struct CbsResult {
@@ -32,6 +49,12 @@ struct CbsResult {
     int nodesExpanded = 0;       // CT nodes popped from OPEN
     int nodesGenerated = 0;      // CT nodes created (root + children with a valid replan)
     long long lowLevelExpanded = 0;
+    int bypasses = 0;            // M5: expansions that took a child's path instead of branching
+    int cardinalSplits = 0;      // M5: conflicts picked per expansion: cardinal / semi / other
+                                 // (counted before a possible bypass)
+    int semiCardinalSplits = 0;
+    int nonCardinalSplits = 0;
+    int mddsBuilt = 0;
     double seconds = 0.0;        // measured wall-clock time
 };
 

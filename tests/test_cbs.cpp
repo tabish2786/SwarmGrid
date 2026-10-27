@@ -11,98 +11,39 @@
 #include "swarmgrid/conflicts.hpp"
 #include "swarmgrid/prioritized.hpp"
 #include "swarmgrid/warehouse_gen.hpp"
+#include "mapf_reference.hpp"
 
 using swarmgrid::CbsOptions;
 using swarmgrid::CbsResult;
 using swarmgrid::CellId;
 using swarmgrid::Grid;
+using swarmgrid_test::referenceSumOfCosts;
 
 namespace {
-
-// Independent reference for small instances: Dijkstra over the JOINT state of all agents.
-// State = every agent's cell + which agents have "finished" (parked on their goal for good).
-// Each timestep costs 1 per unfinished agent, so the cheapest way to finish everyone is the
-// optimal sum of costs. Shares no code with CBS or space-time A*. Returns -1 if unsolvable.
-long long referenceSumOfCosts(const Grid& g, const std::vector<CellId>& starts,
-                              const std::vector<CellId>& goals) {
-    const int k = static_cast<int>(starts.size());
-    const auto V = static_cast<std::uint64_t>(g.numCells());
-    const unsigned allDone = (1u << k) - 1;
-    auto encode = [&](const std::vector<CellId>& pos, unsigned done) {
-        std::uint64_t key = 0;
-        for (CellId c : pos) key = key * V + static_cast<std::uint64_t>(c);
-        return (key << k) | done;
-    };
-    struct Item {
-        long long cost;
-        std::vector<CellId> pos;
-        unsigned done;
-        bool operator>(const Item& o) const { return cost > o.cost; }
-    };
-    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
-    std::unordered_map<std::uint64_t, long long> best;
-    open.push({0, starts, 0u});
-    best[encode(starts, 0u)] = 0;
-    std::vector<CellId> nb;
-    while (!open.empty()) {
-        Item cur = open.top();
-        open.pop();
-        if (best[encode(cur.pos, cur.done)] < cur.cost) continue;
-        if (cur.done == allDone) return cur.cost;
-        auto relax = [&](const std::vector<CellId>& pos, unsigned done, long long cost) {
-            const std::uint64_t key = encode(pos, done);
-            auto it = best.find(key);
-            if (it == best.end() || cost < it->second) {
-                best[key] = cost;
-                open.push({cost, pos, done});
-            }
-        };
-        // Free action: an agent standing on its goal declares itself finished.
-        for (int i = 0; i < k; ++i) {
-            if (!(cur.done >> i & 1u) && cur.pos[static_cast<std::size_t>(i)] == goals[static_cast<std::size_t>(i)]) {
-                relax(cur.pos, cur.done | (1u << i), cur.cost);
-            }
-        }
-        // One timestep: every unfinished agent waits or moves; finished agents stay.
-        std::vector<std::vector<CellId>> options(static_cast<std::size_t>(k));
-        int unfinished = 0;
-        for (int i = 0; i < k; ++i) {
-            const CellId c = cur.pos[static_cast<std::size_t>(i)];
-            options[static_cast<std::size_t>(i)] = {c};
-            if (!(cur.done >> i & 1u)) {
-                ++unfinished;
-                g.neighbors(c, nb);
-                for (CellId m : nb) options[static_cast<std::size_t>(i)].push_back(m);
-            }
-        }
-        if (unfinished == 0) continue;
-        std::vector<CellId> next(static_cast<std::size_t>(k));
-        std::function<void(int)> choose = [&](int i) {
-            if (i == k) {
-                for (int a = 0; a < k; ++a) {
-                    for (int b = a + 1; b < k; ++b) {
-                        const auto ua = static_cast<std::size_t>(a), ub = static_cast<std::size_t>(b);
-                        if (next[ua] == next[ub]) return;  // vertex conflict
-                        if (next[ua] == cur.pos[ub] && next[ub] == cur.pos[ua]) return;  // swap
-                    }
-                }
-                relax(next, cur.done, cur.cost + unfinished);
-                return;
-            }
-            for (CellId c : options[static_cast<std::size_t>(i)]) {
-                next[static_cast<std::size_t>(i)] = c;
-                choose(i + 1);
-            }
-        };
-        choose(0);
-    }
-    return -1;
-}
 
 std::vector<CellId> ids(const Grid& g, std::vector<swarmgrid::Point> pts) {
     std::vector<CellId> out;
     for (auto p : pts) out.push_back(g.toId(p));
     return out;
+}
+
+// M4 plain CBS, each M5 improvement alone, and both (the default). All four must be optimal.
+std::vector<CbsOptions> allVariants() {
+    std::vector<CbsOptions> out;
+    for (int mask = 0; mask < 4; ++mask) {
+        CbsOptions o;
+        o.prioritizeConflicts = (mask & 1) != 0;
+        o.bypass = (mask & 2) != 0;
+        out.push_back(o);
+    }
+    return out;
+}
+
+CbsOptions plainCbs() {
+    CbsOptions o;
+    o.prioritizeConflicts = false;
+    o.bypass = false;
+    return o;
 }
 
 void requireOptimalAndValid(const Grid& g, const std::vector<CellId>& s, const std::vector<CellId>& t,
@@ -132,9 +73,11 @@ TEST_CASE("cbs: corridor swap with one pocket") {
     for (int x = 2; x < 5; ++x) g.setObstacle(x, 1, true);
     const auto s = ids(g, {{0, 0}, {4, 0}});
     const auto t = ids(g, {{4, 0}, {0, 0}});
-    const CbsResult r = swarmgrid::solveCbs(g, s, t);
-    requireOptimalAndValid(g, s, t, r, referenceSumOfCosts(g, s, t));
-    CHECK(r.sumOfCosts == 11);  // one robot ducks into the pocket: 4 + 7
+    for (const CbsOptions& o : allVariants()) {
+        const CbsResult r = swarmgrid::solveCbs(g, s, t, o);
+        requireOptimalAndValid(g, s, t, r, referenceSumOfCosts(g, s, t));
+        CHECK(r.sumOfCosts == 11);  // one robot ducks into the pocket: 4 + 7
+    }
 }
 
 TEST_CASE("cbs: goal-blocking (target conflict) — the parked robot must step aside") {
@@ -144,9 +87,11 @@ TEST_CASE("cbs: goal-blocking (target conflict) — the parked robot must step a
     for (int x : {0, 1, 3, 4}) g.setObstacle(x, 1, true);
     const auto s = ids(g, {{1, 0}, {0, 0}});
     const auto t = ids(g, {{2, 0}, {4, 0}});
-    const CbsResult r = swarmgrid::solveCbs(g, s, t);
-    requireOptimalAndValid(g, s, t, r, referenceSumOfCosts(g, s, t));
-    CHECK(r.sumOfCosts == 7);  // robot 0: (1,0) (2,0) pocket (2,0) = 3; robot 1: 4
+    for (const CbsOptions& o : allVariants()) {
+        const CbsResult r = swarmgrid::solveCbs(g, s, t, o);
+        requireOptimalAndValid(g, s, t, r, referenceSumOfCosts(g, s, t));
+        CHECK(r.sumOfCosts == 7);  // robot 0: (1,0) (2,0) pocket (2,0) = 3; robot 1: 4
+    }
 }
 
 TEST_CASE("cbs: four robots crossing at a plus-shaped intersection") {
@@ -163,10 +108,15 @@ TEST_CASE("cbs: four robots crossing at a plus-shaped intersection") {
     }
     const auto s = ids(g, {{2, 0}, {2, 4}, {0, 2}, {4, 2}});
     const auto t = ids(g, {{2, 4}, {2, 0}, {4, 2}, {0, 2}});
-    const CbsResult r = swarmgrid::solveCbs(g, s, t);
-    requireOptimalAndValid(g, s, t, r, referenceSumOfCosts(g, s, t));
-    CHECK(r.sumOfCosts == 28);  // 16 if they could drive straight through each other
-    CHECK(r.nodesExpanded == 6474);
+    const long long expected = referenceSumOfCosts(g, s, t);
+    CHECK(expected == 28);  // 16 if they could drive straight through each other
+    for (const CbsOptions& o : allVariants()) {
+        requireOptimalAndValid(g, s, t, swarmgrid::solveCbs(g, s, t, o), expected);
+    }
+    const CbsResult plain = swarmgrid::solveCbs(g, s, t, plainCbs());
+    const CbsResult m5 = swarmgrid::solveCbs(g, s, t);
+    CHECK(plain.nodesExpanded == 6474);  // M4
+    CHECK(m5.nodesExpanded == 3784);     // M5: MDD conflict prioritization + bypass
 }
 
 TEST_CASE("cbs: unsolvable instance stops at the node limit") {
@@ -197,7 +147,11 @@ TEST_CASE("cbs: optimal against the joint-space reference on random small instan
         Grid g(4, 4);
         const int walls = rng.uniformInt(0, 3);
         for (int i = 0; i < walls; ++i) {
-            g.setObstacle(rng.uniformInt(0, 3), rng.uniformInt(0, 3), true);
+            // Two statements: the order of evaluation of function arguments is unspecified
+            // (GCC and Clang differ), which would give each compiler different test grids.
+            const int x = rng.uniformInt(0, 3);
+            const int y = rng.uniformInt(0, 3);
+            g.setObstacle(x, y, true);
         }
         const int k = rng.uniformInt(2, 3);
         swarmgrid::MapfInstance inst;
@@ -212,15 +166,16 @@ TEST_CASE("cbs: optimal against the joint-space reference on random small instan
             t.push_back(g.toId(inst.goals[static_cast<std::size_t>(i)]));
         }
         const long long expected = referenceSumOfCosts(g, s, t);
-        CbsOptions opts;
-        opts.maxNodes = 5000;
-        const CbsResult r = swarmgrid::solveCbs(g, s, t, opts);
-        if (expected < 0) {
-            CHECK_FALSE(r.solved);
-            continue;
+        for (CbsOptions opts : allVariants()) {
+            opts.maxNodes = 5000;
+            const CbsResult r = swarmgrid::solveCbs(g, s, t, opts);
+            if (expected < 0) {
+                CHECK_FALSE(r.solved);
+                continue;
+            }
+            requireOptimalAndValid(g, s, t, r, expected);
         }
-        requireOptimalAndValid(g, s, t, r, expected);
-        ++checked;
+        if (expected >= 0) ++checked;
     }
     CHECK(checked > 40);
 }
@@ -234,7 +189,7 @@ TEST_CASE("cbs: warehouse, 10 robots (seed 42): optimal, collision-free, golden 
         s.push_back(g.toId(inst.starts[static_cast<std::size_t>(i)]));
         t.push_back(g.toId(inst.goals[static_cast<std::size_t>(i)]));
     }
-    const CbsResult r = swarmgrid::solveCbs(g, s, t);
+    const CbsResult r = swarmgrid::solveCbs(g, s, t, plainCbs());
     REQUIRE(r.solved);
     CHECK(swarmgrid::validatePlan(g, s, t, r.paths).ok);
     const auto ind = swarmgrid::planMultiAgent(g, s, t, swarmgrid::MultiAgentMode::Independent);
@@ -247,6 +202,34 @@ TEST_CASE("cbs: warehouse, 10 robots (seed 42): optimal, collision-free, golden 
     CHECK(indCost == 200);
     CHECK(priCost == 212);
     CHECK(r.sumOfCosts == 208);
-    CHECK(r.nodesExpanded == 494);
+    CHECK(r.nodesExpanded == 494);  // M4 plain CBS
     CHECK(r.nodesGenerated == 987);
+
+    // M5 finds a plan with the same (optimal) cost in fewer CT nodes.
+    const CbsResult m5 = swarmgrid::solveCbs(g, s, t);
+    REQUIRE(m5.solved);
+    CHECK(swarmgrid::validatePlan(g, s, t, m5.paths).ok);
+    CHECK(m5.sumOfCosts == 208);
+    CHECK(m5.nodesExpanded == 245);
+    CHECK(m5.nodesGenerated == 477);
+    CHECK(m5.bypasses > 0);
+    CHECK(m5.cardinalSplits > 0);
+}
+
+TEST_CASE("cbs: M5 counters add up") {
+    const Grid g = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
+    const auto inst = swarmgrid::generateRandomInstance(g, 10, 42);
+    std::vector<CellId> s, t;
+    for (int i = 0; i < 10; ++i) {
+        s.push_back(g.toId(inst.starts[static_cast<std::size_t>(i)]));
+        t.push_back(g.toId(inst.goals[static_cast<std::size_t>(i)]));
+    }
+    const CbsResult m5 = swarmgrid::solveCbs(g, s, t);
+    // Every expansion except the last (the solution) picks one conflict; some then bypass.
+    CHECK(m5.cardinalSplits + m5.semiCardinalSplits + m5.nonCardinalSplits == m5.nodesExpanded - 1);
+    CHECK(m5.bypasses < m5.nodesExpanded);
+    const CbsResult plain = swarmgrid::solveCbs(g, s, t, plainCbs());
+    CHECK(plain.mddsBuilt == 0);
+    CHECK(plain.bypasses == 0);
+    CHECK(plain.nonCardinalSplits == plain.nodesExpanded - 1);
 }

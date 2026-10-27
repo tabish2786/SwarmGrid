@@ -47,13 +47,17 @@ add_library(swarmgrid_core
   src/plan_io.cpp
   src/prioritized.cpp
   src/conflicts.cpp
+  src/mdd.cpp
   src/cbs.cpp
+  src/ecbs.cpp
+  src/task_assignment.cpp
+  src/lifelong.cpp
 )
 target_include_directories(swarmgrid_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(swarmgrid_core PRIVATE swarmgrid_warnings)
 
 # ---- CLI ----
-add_executable(swarmgrid src/main.cpp)
+add_executable(swarmgrid src/main.cpp src/bench_cli.cpp)
 target_link_libraries(swarmgrid PRIVATE swarmgrid_core swarmgrid_warnings)
 
 # ---- tests ----
@@ -72,7 +76,11 @@ if(SWARMGRID_BUILD_TESTS)
     tests/test_plan_io.cpp
     tests/test_prioritized.cpp
     tests/test_conflicts.cpp
+    tests/test_mdd.cpp
     tests/test_cbs.cpp
+    tests/test_ecbs.cpp
+    tests/test_task_assignment.cpp
+    tests/test_lifelong.cpp
   )
   target_link_libraries(swarmgrid_tests PRIVATE swarmgrid_core swarmgrid_warnings)
   target_include_directories(swarmgrid_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)

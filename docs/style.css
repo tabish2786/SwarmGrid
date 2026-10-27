@@ -13,6 +13,7 @@
   --ok: #12805c;
   --chip: #eef2f7;
   --on-accent: #ffffff;
+  --order: #c27803;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -30,6 +31,7 @@
     --ok: #3ccf91;
     --chip: #222834;
     --on-accent: #0b1220;
+    --order: #f0b429;
     color-scheme: dark;
   }
 }

@@ -8,8 +8,9 @@
 //   swarmgrid export-plan <file.map> <file.scen> <numAgents> <out.json>
 //   swarmgrid export-demos <out.js>
 //   swarmgrid cbs-bench [timeLimitSeconds]
-//
-// Later milestones add: solve, validate, bench, lifelong.
+//   swarmgrid bench --out results.csv [options]            (M7, see bench_cli.hpp)
+//   swarmgrid lifelong [options]                            (M8)
+//   swarmgrid lifelong-bench --out lifelong.csv [options]   (M8)
 
 #include <cstddef>
 #include <cstdint>
@@ -17,13 +18,16 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <vector>
 
+#include "bench_cli.hpp"
 #include "swarmgrid/ascii.hpp"
 #include "swarmgrid/cbs.hpp"
 #include "swarmgrid/conflicts.hpp"
 #include "swarmgrid/astar.hpp"
+#include "swarmgrid/ecbs.hpp"
 #include "swarmgrid/grid.hpp"
 #include "swarmgrid/heuristic.hpp"
 #include "swarmgrid/map_io.hpp"
@@ -43,7 +47,10 @@ void printUsage() {
               << "  swarmgrid st-demo\n"
               << "  swarmgrid export-plan <file.map> <file.scen> <numAgents> <out.json>\n"
               << "  swarmgrid export-demos <out.js>\n"
-              << "  swarmgrid cbs-bench [timeLimitSeconds]\n";
+              << "  swarmgrid cbs-bench [timeLimitSeconds]\n"
+              << "  swarmgrid bench --out results.csv [options]   (--help for options)\n"
+              << "  swarmgrid lifelong [options]                  (--help for options)\n"
+              << "  swarmgrid lifelong-bench --out lifelong.csv [options]\n";
 }
 
 // Strict integer argument: the whole text must be a number, otherwise an error that names the
@@ -333,6 +340,10 @@ swarmgrid::PlanExport cbsPlan(const swarmgrid::MapfInstance& inst, const std::st
     if (!r.solved || !swarmgrid::validatePlan(inst.grid, starts, goals, r.paths).ok) {
         throw std::runtime_error("CBS failed or produced an invalid plan for " + id);
     }
+    swarmgrid::CbsOptions plainOptions;
+    plainOptions.prioritizeConflicts = false;
+    plainOptions.bypass = false;
+    const swarmgrid::CbsResult plain = swarmgrid::solveCbs(inst.grid, starts, goals, plainOptions);
     swarmgrid::PlanExport plan;
     plan.id = id;
     plan.title = title;
@@ -340,7 +351,43 @@ swarmgrid::PlanExport cbsPlan(const swarmgrid::MapfInstance& inst, const std::st
     plan.note =
         "Same robots again, now solved optimally with CBS: zero collisions and the lowest possible "
         "sum of costs (" + std::to_string(r.sumOfCosts) + ", vs 212 for prioritized planning). CBS explored " +
-        std::to_string(r.nodesExpanded) + " constraint-tree nodes to prove it.";
+        std::to_string(r.nodesExpanded) + " constraint-tree nodes to prove it; without the M5 speedups "
+        "(MDD conflict prioritization and bypass) it needed " + std::to_string(plain.nodesExpanded) + ".";
+    plan.grid = inst.grid;
+    plan.starts = inst.starts;
+    plan.goals = inst.goals;
+    plan.paths = r.paths;
+    return plan;
+}
+
+// M6 showcase: 50 robots, too many for CBS on this small map, solved by ECBS within w of optimal.
+swarmgrid::PlanExport ecbsPlan(const swarmgrid::MapfInstance& inst, double weight, const std::string& id,
+                               const std::string& title) {
+    const auto starts = cellIds(inst.grid, inst.starts);
+    const auto goals = cellIds(inst.grid, inst.goals);
+    swarmgrid::EcbsOptions o;
+    o.weight = weight;
+    const swarmgrid::EcbsResult r = swarmgrid::solveEcbs(inst.grid, starts, goals, o);
+    if (!r.solved || !swarmgrid::validatePlan(inst.grid, starts, goals, r.paths).ok) {
+        throw std::runtime_error("ECBS failed or produced an invalid plan for " + id);
+    }
+    const swarmgrid::MultiAgentResult pri =
+        swarmgrid::planMultiAgent(inst.grid, starts, goals, swarmgrid::MultiAgentMode::Prioritized);
+    long long priCost = 0;
+    for (const auto& p : pri.paths) priCost += static_cast<long long>(p.size()) - 1;
+    swarmgrid::PlanExport plan;
+    plan.id = id;
+    plan.title = title;
+    plan.solver = "ECBS (bounded-suboptimal CBS with focal search), checked by the independent validator.";
+    std::ostringstream w;
+    w << weight;
+    // The CBS figure was measured once (CBS + M5, 60 s limit, 89,893 nodes, unsolved); it is not
+    // rerun here because that would make export-demos take a minute.
+    plan.note = "50 robots on the small warehouse: CBS (with the M5 speedups) had not finished after 60 s "
+                "when we tried. ECBS with w = " + w.str() + " finishes in " + std::to_string(r.nodesExpanded) + " constraint-tree nodes. Sum of costs " +
+                std::to_string(r.sumOfCosts) + "; no plan can be below " + std::to_string(r.lowerBound) +
+                ", so it is provably within w of optimal." +
+                (pri.solved ? " Prioritized planning needs " + std::to_string(priCost) + "." : "");
     plan.grid = inst.grid;
     plan.starts = inst.starts;
     plan.goals = inst.goals;
@@ -427,6 +474,8 @@ int runExportDemos(int argc, char** argv) {
         cbsPlan(ten, "warehouse-10-cbs", "Warehouse, 10 robots, optimal (CBS)"),
         independentPlan(swarmgrid::generateRandomInstance(warehouse, 30, 7), "warehouse-30",
                         "Warehouse, 30 robots (seed 7)"),
+        ecbsPlan(swarmgrid::generateRandomInstance(warehouse, 50, 42), 1.5, "warehouse-50-ecbs",
+                 "Warehouse, 50 robots, bounded (ECBS w = 1.5)"),
         constraintsPlan(),
     };
     const BenchResult b = computeAstarBench(100, 42);
@@ -457,13 +506,14 @@ int runCbsBench(int argc, char** argv) {
     }
     const swarmgrid::Grid g = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
     std::cout << "generated warehouse " << g.width() << " x " << g.height() << ", 10 instances per row, "
-              << "CBS time limit " << limit << " s\n"
-              << "robots | CBS solved | mean CBS time (s) | mean CT nodes | prioritized solved | "
-                 "CBS cost vs prioritized (both solved)\n";
+              << "time limit " << limit << " s per solve\n"
+              << "plain = M4 CBS, M5 = CBS + MDD conflict prioritization + bypass (both optimal)\n"
+              << "robots | solved plain / M5 | CT nodes expanded plain -> M5 (solved by both) | "
+                 "mean time plain -> M5 (s) | prioritized solved | M5 cost vs prioritized\n";
     for (int n : {5, 10, 15, 20, 25, 30}) {
-        int cbsSolved = 0, priSolved = 0, both = 0;
-        double cbsTime = 0;
-        long long nodes = 0, cbsCost = 0, priCost = 0;
+        int plainSolved = 0, m5Solved = 0, both = 0, priSolved = 0, priBoth = 0;
+        double plainTime = 0, m5Time = 0;
+        long long plainNodes = 0, m5Nodes = 0, m5Cost = 0, priCost = 0;
         for (std::uint32_t seed = 1; seed <= 10; ++seed) {
             const swarmgrid::MapfInstance inst = swarmgrid::generateRandomInstance(g, n, seed);
             const auto s = cellIds(g, inst.starts);
@@ -471,26 +521,45 @@ int runCbsBench(int argc, char** argv) {
             swarmgrid::CbsOptions opts;
             opts.timeLimitSeconds = limit;
             opts.maxNodes = 1000000;
-            const swarmgrid::CbsResult c = swarmgrid::solveCbs(g, s, t, opts);
+            const swarmgrid::CbsResult m5 = swarmgrid::solveCbs(g, s, t, opts);
+            opts.prioritizeConflicts = false;
+            opts.bypass = false;
+            const swarmgrid::CbsResult plain = swarmgrid::solveCbs(g, s, t, opts);
             const swarmgrid::MultiAgentResult p =
                 swarmgrid::planMultiAgent(g, s, t, swarmgrid::MultiAgentMode::Prioritized);
-            if (c.solved) {
-                if (!swarmgrid::validatePlan(g, s, t, c.paths).ok) throw std::logic_error("invalid CBS plan");
-                ++cbsSolved;
-                cbsTime += c.seconds;
-                nodes += c.nodesExpanded;
+            for (const auto* r : {&plain, &m5}) {
+                if (r->solved && !swarmgrid::validatePlan(g, s, t, r->paths).ok) {
+                    throw std::logic_error("invalid CBS plan");
+                }
             }
-            if (p.solved) ++priSolved;
-            if (c.solved && p.solved) {
+            if (plain.solved && m5.solved && plain.sumOfCosts != m5.sumOfCosts) {
+                throw std::logic_error("plain CBS and M5 disagree on the optimal cost");
+            }
+            plainSolved += plain.solved ? 1 : 0;
+            m5Solved += m5.solved ? 1 : 0;
+            priSolved += p.solved ? 1 : 0;
+            if (plain.solved && m5.solved) {
                 ++both;
-                cbsCost += c.sumOfCosts;
+                plainNodes += plain.nodesExpanded;
+                m5Nodes += m5.nodesExpanded;
+                plainTime += plain.seconds;
+                m5Time += m5.seconds;
+            }
+            if (m5.solved && p.solved) {
+                ++priBoth;
+                m5Cost += m5.sumOfCosts;
                 for (const auto& path : p.paths) priCost += static_cast<long long>(path.size()) - 1;
             }
         }
-        std::cout << n << " | " << cbsSolved << "/10 | "
-                  << (cbsSolved ? cbsTime / cbsSolved : 0.0) << " | "
-                  << (cbsSolved ? nodes / cbsSolved : 0) << " | " << priSolved << "/10 | ";
-        if (both) std::cout << cbsCost << " vs " << priCost;
+        std::cout << n << " | " << plainSolved << " / " << m5Solved << " of 10 | ";
+        if (both) {
+            std::cout << plainNodes << " -> " << m5Nodes << " (" << static_cast<double>(plainNodes) / static_cast<double>(m5Nodes > 0 ? m5Nodes : 1)
+                      << "x fewer) | " << plainTime / both << " -> " << m5Time / both;
+        } else {
+            std::cout << "- | -";
+        }
+        std::cout << " | " << priSolved << "/10 | ";
+        if (priBoth) std::cout << m5Cost << " vs " << priCost;
         std::cout << '\n';
     }
     return 0;
@@ -513,6 +582,9 @@ int main(int argc, char** argv) {
         if (cmd == "export-plan") return runExportPlan(argc, argv);
         if (cmd == "export-demos") return runExportDemos(argc, argv);
         if (cmd == "cbs-bench") return runCbsBench(argc, argv);
+        if (cmd == "bench") return runBench(argc, argv);
+        if (cmd == "lifelong") return runLifelongCommand(argc, argv);
+        if (cmd == "lifelong-bench") return runLifelongBench(argc, argv);
         printUsage();
         return 1;
     } catch (const std::exception& e) {

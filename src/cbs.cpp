@@ -1,7 +1,9 @@
 #include "swarmgrid/cbs.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <stdexcept>
@@ -10,6 +12,7 @@
 #include "swarmgrid/conflicts.hpp"
 #include "swarmgrid/constraints.hpp"
 #include "swarmgrid/heuristic.hpp"
+#include "swarmgrid/mdd.hpp"
 #include "swarmgrid/space_time_astar.hpp"
 
 namespace swarmgrid {
@@ -21,12 +24,23 @@ struct CtNode {
     std::vector<Path> paths;
     long long cost = 0;                   // sum of costs
     int conflicts = 0;                    // number of conflicts among `paths` (tie-break)
+    // M5: MDD of each agent under this node's constraints, built on demand. A child shares the
+    // parent's MDDs except for the one agent it replanned (whose constraints changed).
+    std::vector<std::shared_ptr<const Mdd>> mdds;
 };
 
 long long sumOfCosts(const std::vector<Path>& paths) {
     long long s = 0;
     for (const Path& p : paths) s += static_cast<long long>(p.size()) - 1;
     return s;
+}
+
+// Does every optimal path of this agent stand on `cell` at time t? After its arrival time the
+// agent is parked on its goal, so levels past the end read as the last (goal) level.
+bool singletonAt(const Mdd& mdd, int t, CellId cell) {
+    if (mdd.levels.empty()) return false;
+    const auto i = std::min(static_cast<std::size_t>(t), mdd.levels.size() - 1);
+    return mdd.levels[i].size() == 1 && mdd.levels[i][0] == cell;
 }
 
 }  // namespace
@@ -78,10 +92,38 @@ CbsResult solveCbs(const Grid& grid, const std::vector<CellId>& starts,
         root.paths.push_back(std::move(*path));
     }
     root.cost = sumOfCosts(root.paths);
-    root.conflicts = static_cast<int>(findAllConflicts(root.paths).size());
+    root.conflicts = static_cast<int>(findAllConflicts(root.paths, options.window).size());
+    root.mdds.resize(n);
     nodes.push_back(std::move(root));
     open.push(0);
     result.nodesGenerated = 1;
+
+    auto mddOf = [&](CtNode& node, int agent) -> const Mdd& {
+        auto& slot = node.mdds[static_cast<std::size_t>(agent)];
+        if (!slot) {
+            const auto a = static_cast<std::size_t>(agent);
+            slot = std::make_shared<const Mdd>(buildMdd(grid, starts[a], goals[a],
+                                                        static_cast<int>(node.paths[a].size()) - 1,
+                                                        h[a], ConstraintTable(node.constraints, agent)));
+            ++result.mddsBuilt;
+        }
+        return *slot;
+    };
+
+    // How many of the two agents are forced to a longer path by their branch (0, 1 or 2).
+    auto cardinality = [&](CtNode& node, const Conflict& c) {
+        int forced = 0;
+        if (c.type == ConflictType::Edge) {
+            const Mdd& m1 = mddOf(node, c.a1);
+            if (singletonAt(m1, c.t - 1, c.cell) && singletonAt(m1, c.t, c.to)) ++forced;
+            const Mdd& m2 = mddOf(node, c.a2);
+            if (singletonAt(m2, c.t - 1, c.to) && singletonAt(m2, c.t, c.cell)) ++forced;
+        } else {
+            if (singletonAt(mddOf(node, c.a1), c.t, c.cell)) ++forced;
+            if (singletonAt(mddOf(node, c.a2), c.t, c.cell)) ++forced;
+        }
+        return forced;
+    };
 
     while (!open.empty()) {
         if (result.nodesExpanded >= options.maxNodes ||
@@ -92,10 +134,31 @@ CbsResult solveCbs(const Grid& grid, const std::vector<CellId>& starts,
         const int index = open.top();
         open.pop();
         ++result.nodesExpanded;
+        const auto parentIndex = static_cast<std::size_t>(index);
 
-        const std::optional<Conflict> conflict = findFirstConflict(nodes[static_cast<std::size_t>(index)].paths);
+        std::optional<Conflict> conflict;
+        if (options.prioritizeConflicts) {
+            const std::vector<Conflict> all = findAllConflicts(nodes[parentIndex].paths, options.window);
+            int bestForced = -1;
+            for (const Conflict& c : all) {  // first cardinal, else first semi-cardinal, else first
+                const int forced = cardinality(nodes[parentIndex], c);
+                if (forced > bestForced) {
+                    bestForced = forced;
+                    conflict = c;
+                    if (forced == 2) break;
+                }
+            }
+            if (conflict) {
+                if (bestForced == 2) ++result.cardinalSplits;
+                else if (bestForced == 1) ++result.semiCardinalSplits;
+                else ++result.nonCardinalSplits;
+            }
+        } else {
+            conflict = findFirstConflict(nodes[parentIndex].paths, options.window);
+            if (conflict) ++result.nonCardinalSplits;
+        }
         if (!conflict) {
-            CtNode& best = nodes[static_cast<std::size_t>(index)];
+            CtNode& best = nodes[parentIndex];
             result.solved = true;
             result.paths = best.paths;
             result.sumOfCosts = best.cost;
@@ -112,17 +175,42 @@ CbsResult solveCbs(const Grid& grid, const std::vector<CellId>& starts,
             branches[1] = {conflict->a2, vertexConstraint(conflict->a2, conflict->cell, conflict->t)};
         }
 
+        std::vector<std::pair<int, CtNode>> children;  // (replanned agent, node)
         for (const auto& [agent, constraint] : branches) {
+            const CtNode& parent = nodes[parentIndex];
             CtNode child;
-            child.constraints = nodes[static_cast<std::size_t>(index)].constraints;
+            child.constraints = parent.constraints;
             child.constraints.push_back(constraint);
             auto path = replan(child.constraints, agent);
             if (!path) continue;  // this branch has no solution
-            child.paths = nodes[static_cast<std::size_t>(index)].paths;
+            child.paths = parent.paths;
             child.paths[static_cast<std::size_t>(agent)] = std::move(*path);
             child.cost = sumOfCosts(child.paths);
-            child.conflicts = static_cast<int>(findAllConflicts(child.paths).size());
-            nodes.push_back(std::move(child));  // may reallocate: no references held across this
+            child.conflicts = static_cast<int>(findAllConflicts(child.paths, options.window).size());
+            child.mdds = parent.mdds;
+            child.mdds[static_cast<std::size_t>(agent)].reset();  // its constraints changed
+            children.emplace_back(agent, std::move(child));
+        }
+
+        if (options.bypass) {
+            // A child just as cheap with fewer conflicts: its new path also satisfies the parent's
+            // constraints (a subset) and has the same length, so adopt it and look again.
+            CtNode& parent = nodes[parentIndex];
+            auto it = std::find_if(children.begin(), children.end(), [&](const auto& ch) {
+                return ch.second.cost == parent.cost && ch.second.conflicts < parent.conflicts;
+            });
+            if (it != children.end()) {
+                const auto a = static_cast<std::size_t>(it->first);
+                parent.paths[a] = std::move(it->second.paths[a]);
+                parent.conflicts = it->second.conflicts;
+                // Same constraints and same cost: the agent's MDD is unchanged, keep it.
+                ++result.bypasses;
+                open.push(index);
+                continue;
+            }
+        }
+        for (auto& child : children) {
+            nodes.push_back(std::move(child.second));  // may reallocate: no references held across this
             open.push(static_cast<int>(nodes.size()) - 1);
             ++result.nodesGenerated;
         }

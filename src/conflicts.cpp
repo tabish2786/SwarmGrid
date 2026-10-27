@@ -12,9 +12,11 @@ namespace {
 
 CellId at(const Path& p, std::size_t t) { return t < p.size() ? p[t] : p.back(); }
 
-std::size_t horizonOf(const std::vector<Path>& paths) {
+// Times 0 .. horizon-1 can hold a conflict: after the longest path everyone is parked.
+std::size_t horizonOf(const std::vector<Path>& paths, int window) {
     std::size_t h = 0;
     for (const Path& p : paths) h = std::max(h, p.size());
+    if (window >= 0) h = std::min(h, static_cast<std::size_t>(window) + 1);
     return h;
 }
 
@@ -67,9 +69,9 @@ void conflictsAt(const std::vector<Path>& paths, std::size_t t, bool firstOnly,
 
 }  // namespace
 
-std::optional<Conflict> findFirstConflict(const std::vector<Path>& paths) {
+std::optional<Conflict> findFirstConflict(const std::vector<Path>& paths, int window) {
     std::vector<Conflict> found;
-    const std::size_t horizon = horizonOf(paths);
+    const std::size_t horizon = horizonOf(paths, window);
     for (std::size_t t = 0; t < horizon; ++t) {
         conflictsAt(paths, t, true, found);
         if (!found.empty()) return found.front();
@@ -77,9 +79,9 @@ std::optional<Conflict> findFirstConflict(const std::vector<Path>& paths) {
     return std::nullopt;  // after the horizon everyone is parked on distinct cells or conflicting already
 }
 
-std::vector<Conflict> findAllConflicts(const std::vector<Path>& paths) {
+std::vector<Conflict> findAllConflicts(const std::vector<Path>& paths, int window) {
     std::vector<Conflict> found;
-    const std::size_t horizon = horizonOf(paths);
+    const std::size_t horizon = horizonOf(paths, window);
     for (std::size_t t = 0; t < horizon; ++t) conflictsAt(paths, t, false, found);
     return found;
 }

@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "swarmgrid/cbs.hpp"
+#include "swarmgrid/ecbs.hpp"
 #include "swarmgrid/prioritized.hpp"
+#include "swarmgrid/task_assignment.hpp"
 #include "swarmgrid/warehouse_gen.hpp"
 
 namespace {
@@ -24,7 +26,12 @@ std::vector<swarmgrid::CellId> g_goals;
 swarmgrid::MultiAgentResult g_result;
 int g_ctNodes = 0;
 int g_limitReached = 0;
+double g_ecbsWeight = 1.2;
+double g_lowerBound = 0;
 std::string g_error;
+std::vector<swarmgrid::CellId> g_assignRobots;
+std::vector<swarmgrid::CellId> g_assignOrders;
+std::vector<swarmgrid::Assignment> g_assignments;
 
 bool validAgent(int i) { return i >= 0 && i < static_cast<int>(g_starts.size()); }
 
@@ -37,6 +44,53 @@ EMSCRIPTEN_KEEPALIVE int sg_height() { return g_grid.height(); }
 
 EMSCRIPTEN_KEEPALIVE int sg_is_free(int cell) {
     return cell >= 0 && cell < g_grid.numCells() && g_grid.isFree(cell) ? 1 : 0;
+}
+
+// Map editing (shelves, broken robots). Returns 1, or 0 for a cell outside the grid.
+EMSCRIPTEN_KEEPALIVE int sg_set_obstacle(int cell, int blocked) {
+    if (cell < 0 || cell >= g_grid.numCells()) return 0;
+    const swarmgrid::Point p = g_grid.toPoint(cell);
+    g_grid.setObstacle(p.x, p.y, blocked != 0);
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE void sg_reset_map() {
+    g_grid = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
+}
+
+// Order assignment (see task_assignment.hpp): add the idle robots' cells and the open orders'
+// cells, run (greedy nearest pair, or optimal Hungarian), then read the pairs back. Indices are
+// in the order added.
+EMSCRIPTEN_KEEPALIVE void sg_assign_clear() {
+    g_assignRobots.clear();
+    g_assignOrders.clear();
+    g_assignments.clear();
+}
+EMSCRIPTEN_KEEPALIVE void sg_assign_add_robot(int cell) { g_assignRobots.push_back(cell); }
+EMSCRIPTEN_KEEPALIVE void sg_assign_add_order(int cell) { g_assignOrders.push_back(cell); }
+
+// Returns the number of pairs, or -1 for invalid input (see sg_last_error).
+// optimal = 0: greedy nearest pair; 1: Hungarian (most pairs, then least total distance).
+EMSCRIPTEN_KEEPALIVE int sg_assign_run_policy(int optimal) {
+    try {
+        g_assignments = optimal ? swarmgrid::assignOptimal(g_grid, g_assignRobots, g_assignOrders)
+                                : swarmgrid::assignNearest(g_grid, g_assignRobots, g_assignOrders);
+        return static_cast<int>(g_assignments.size());
+    } catch (const std::exception& e) {
+        g_assignments.clear();
+        g_error = e.what();
+        return -1;
+    }
+}
+EMSCRIPTEN_KEEPALIVE int sg_assign_run() { return sg_assign_run_policy(0); }
+EMSCRIPTEN_KEEPALIVE int sg_assign_distance(int i) {
+    return i >= 0 && i < static_cast<int>(g_assignments.size()) ? g_assignments[static_cast<std::size_t>(i)].distance : -1;
+}
+EMSCRIPTEN_KEEPALIVE int sg_assign_robot(int i) {
+    return i >= 0 && i < static_cast<int>(g_assignments.size()) ? g_assignments[static_cast<std::size_t>(i)].robot : -1;
+}
+EMSCRIPTEN_KEEPALIVE int sg_assign_order(int i) {
+    return i >= 0 && i < static_cast<int>(g_assignments.size()) ? g_assignments[static_cast<std::size_t>(i)].order : -1;
 }
 
 EMSCRIPTEN_KEEPALIVE void sg_clear_agents() {
@@ -71,8 +125,13 @@ EMSCRIPTEN_KEEPALIVE int sg_agent_count() { return static_cast<int>(g_starts.siz
 EMSCRIPTEN_KEEPALIVE int sg_agent_start(int i) { return validAgent(i) ? g_starts[static_cast<std::size_t>(i)] : -1; }
 EMSCRIPTEN_KEEPALIVE int sg_agent_goal(int i) { return validAgent(i) ? g_goals[static_cast<std::size_t>(i)] : -1; }
 
-// mode 0 = independent A*, 1 = prioritized planning, 2 = CBS (optimal; stops after
-// maxNodes constraint-tree nodes or timeLimitSeconds, see sg_limit_reached).
+// Suboptimality bound for mode 3 (ECBS). Values below 1 are raised to 1.
+EMSCRIPTEN_KEEPALIVE void sg_set_ecbs_weight(double w) { g_ecbsWeight = w < 1.0 ? 1.0 : w; }
+
+// mode 0 = independent A*, 1 = prioritized planning, 2 = CBS (optimal, with the M5
+// improvements; stops after maxNodes constraint-tree nodes or timeLimitSeconds, see
+// sg_limit_reached), 3 = ECBS (sum of costs <= weight * optimal, same limits; see
+// sg_lower_bound).
 // Returns 1 if every agent got a path, 0 if planning failed (see sg_failed_agent /
 // sg_limit_reached), -1 if the input was invalid (see sg_last_error).
 EMSCRIPTEN_KEEPALIVE int sg_plan_with_limits(int mode, int maxNodes, double timeLimitSeconds) {
@@ -80,6 +139,23 @@ EMSCRIPTEN_KEEPALIVE int sg_plan_with_limits(int mode, int maxNodes, double time
         g_error.clear();
         g_ctNodes = 0;
         g_limitReached = 0;
+        g_lowerBound = 0;
+        if (mode == 3) {
+            swarmgrid::EcbsOptions opts;
+            opts.weight = g_ecbsWeight;
+            opts.maxNodes = maxNodes;
+            opts.timeLimitSeconds = timeLimitSeconds;
+            const swarmgrid::EcbsResult r = swarmgrid::solveEcbs(g_grid, g_starts, g_goals, opts);
+            g_result = swarmgrid::MultiAgentResult{};
+            g_result.solved = r.solved;
+            g_result.paths = r.paths;
+            g_result.attempts = 1;
+            g_result.expanded = r.lowLevelExpanded;
+            g_ctNodes = r.nodesExpanded;
+            g_limitReached = r.limitReached ? 1 : 0;
+            g_lowerBound = static_cast<double>(r.lowerBound);
+            return r.solved ? 1 : 0;
+        }
         if (mode == 2) {
             swarmgrid::CbsOptions opts;
             opts.maxNodes = maxNodes;
@@ -92,6 +168,7 @@ EMSCRIPTEN_KEEPALIVE int sg_plan_with_limits(int mode, int maxNodes, double time
             g_result.expanded = r.lowLevelExpanded;
             g_ctNodes = r.nodesExpanded;
             g_limitReached = r.limitReached ? 1 : 0;
+            g_lowerBound = static_cast<double>(r.sumOfCosts);
             return r.solved ? 1 : 0;
         }
         g_result = swarmgrid::planMultiAgent(
@@ -121,6 +198,8 @@ EMSCRIPTEN_KEEPALIVE int sg_path_cell(int i, int t) {
 EMSCRIPTEN_KEEPALIVE int sg_failed_agent() { return g_result.failedAgent; }
 EMSCRIPTEN_KEEPALIVE int sg_ct_nodes() { return g_ctNodes; }
 EMSCRIPTEN_KEEPALIVE int sg_limit_reached() { return g_limitReached; }
+// After a solved CBS (mode 2) or ECBS (mode 3): no plan has a smaller sum of costs than this.
+EMSCRIPTEN_KEEPALIVE double sg_lower_bound() { return g_lowerBound; }
 EMSCRIPTEN_KEEPALIVE int sg_attempts() { return g_result.attempts; }
 EMSCRIPTEN_KEEPALIVE double sg_expanded() { return static_cast<double>(g_result.expanded); }
 EMSCRIPTEN_KEEPALIVE const char* sg_last_error() { return g_error.c_str(); }

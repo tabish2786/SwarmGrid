@@ -32,10 +32,11 @@ struct Conflict {
 // The earliest conflict: smallest t, then smallest (a1, a2) pair, a vertex/target conflict
 // before an edge conflict at the same t. Deterministic. std::nullopt if the paths are
 // conflict-free. O(T * n^2) for n agents and makespan T.
-std::optional<Conflict> findFirstConflict(const std::vector<Path>& paths);
+// window >= 0 (M8, rolling-horizon planning): only conflicts at times t <= window count.
+std::optional<Conflict> findFirstConflict(const std::vector<Path>& paths, int window = -1);
 
 // Every conflict, in the same order findFirstConflict would report them.
-std::vector<Conflict> findAllConflicts(const std::vector<Path>& paths);
+std::vector<Conflict> findAllConflicts(const std::vector<Path>& paths, int window = -1);
 
 struct ValidationReport {
     bool ok = false;                  // no errors and no conflicts

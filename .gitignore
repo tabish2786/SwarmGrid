@@ -9,4 +9,5 @@ compile_commands.json
 results/
 *.csv
 !data/**/*.csv
+!docs/bench/data/*.csv
 __pycache__/

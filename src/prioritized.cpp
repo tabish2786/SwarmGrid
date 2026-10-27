@@ -15,7 +15,18 @@ namespace swarmgrid {
 namespace {
 
 // Turns a planned path into the constraints every later agent must respect.
-void reserve(ConstraintTable& table, const Path& path) {
+void reserve(ConstraintTable& table, const Path& path, int window) {
+    if (window >= 0) {
+        // Rolling horizon: occupy (cell, t) only for t <= window, parked or not.
+        for (int t = 0; t <= window; ++t) {
+            const std::size_t i = std::min(static_cast<std::size_t>(t), path.size() - 1);
+            table.add(vertexConstraint(0, path[i], t));
+            if (t > 0 && i == static_cast<std::size_t>(t) && path[i] != path[i - 1]) {
+                table.add(edgeConstraint(0, path[i], path[i - 1], t));
+            }
+        }
+        return;
+    }
     for (std::size_t t = 0; t < path.size(); ++t) {
         const int time = static_cast<int>(t);
         table.add(vertexConstraint(0, path[t], time));
@@ -32,7 +43,7 @@ void reserve(ConstraintTable& table, const Path& path) {
 
 MultiAgentResult planMultiAgent(const Grid& grid, const std::vector<CellId>& starts,
                                 const std::vector<CellId>& goals, MultiAgentMode mode,
-                                int maxAttempts) {
+                                int maxAttempts, int window) {
     requireValidAgents(grid, starts, goals, "planMultiAgent");
     if (maxAttempts < 1) throw std::invalid_argument("planMultiAgent: maxAttempts must be >= 1");
     const std::size_t n = starts.size();
@@ -77,7 +88,7 @@ MultiAgentResult planMultiAgent(const Grid& grid, const std::vector<CellId>& sta
                 failed = agent;
                 break;
             }
-            reserve(reserved, *path);
+            reserve(reserved, *path, window);
             paths[a] = std::move(*path);
         }
         if (failed < 0) {

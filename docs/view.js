@@ -192,12 +192,14 @@
     }
 
     // opts.trails: draw where robots have been. opts.selected: robot index to highlight (its whole
-    // planned route is drawn dashed), or -1.
+    // planned route is drawn dashed), or -1. opts.orders: [{x, y, color}] warehouse orders to draw
+    // as parcels (color = the robot that took it, or null if nobody has yet). opts.broken: a Set of
+    // robot indices drawn as broken.
     draw(time, opts) {
       const plan = this.plan;
       if (!plan) return;
       if (!this.mapLayer) this.rebuildMap();
-      const o = Object.assign({ trails: true, selected: -1 }, opts || {});
+      const o = Object.assign({ trails: true, selected: -1, orders: [], broken: null }, opts || {});
       const ctx = this.ctx;
       const c = this.cell;
       const tFloor = Math.floor(time);
@@ -241,6 +243,24 @@
         roundRect(ctx, goal[0] * c + inset, goal[1] * c + inset, c - 2 * inset, c - 2 * inset, c * 0.12);
         ctx.stroke();
       });
+
+      // Orders: a parcel on the floor, outlined in the colour of the robot fetching it.
+      for (const ord of o.orders) {
+        const [cx, cy] = this.center([ord.x, ord.y]);
+        const s = c * 0.42;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = css("--order");
+        roundRect(ctx, -s / 2, -s / 2, s, s, c * 0.06);
+        ctx.fill();
+        if (ord.color) {
+          ctx.strokeStyle = ord.color;
+          ctx.lineWidth = Math.max(1.5, c * 0.09);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
 
       // The selected robot's whole route, dashed.
       if (o.selected >= 0 && o.selected < plan.agents.length) {
@@ -293,17 +313,20 @@
       const radius = c * 0.36;
       plan.agents.forEach((a, i) => {
         const [x, y] = this.robotXY(a, time);
+        const broken = !!(o.broken && o.broken.has(i));
         if (i === o.selected) {
           ctx.strokeStyle = css("--text");
           ctx.lineWidth = Math.max(2, c * 0.1);
           ctx.beginPath(); ctx.arc(x, y, radius + c * 0.12, 0, Math.PI * 2); ctx.stroke();
         }
-        ctx.fillStyle = agentColor(i);
+        ctx.fillStyle = broken ? css("--muted") : agentColor(i);
         ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = "rgba(255,255,255,0.9)";
         ctx.lineWidth = Math.max(1, c * 0.06);
         ctx.stroke();
-        if (c >= 15) {
+        if (broken) {
+          this.drawCross(x, y, radius * 0.55, "#ffffff");
+        } else if (c >= 15) {
           ctx.fillStyle = "#ffffff";
           ctx.font = `700 ${Math.round(c * (i >= 10 ? 0.34 : 0.42))}px system-ui, sans-serif`;
           ctx.textAlign = "center";

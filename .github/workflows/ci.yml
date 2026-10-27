@@ -1,0 +1,48 @@
+# Builds and tests SwarmGrid on every push and pull request, on three operating systems and four
+# compilers. The last step regenerates the dashboard data and fails if it differs from the
+# committed docs/data.js, which checks that the planner gives identical results everywhere.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GCC (Debug, ASan + UBSan, warnings as errors)
+            os: ubuntu-latest
+            configure: -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++ -DSWARMGRID_SANITIZE=ON -DSWARMGRID_WERROR=ON
+          - name: Linux Clang (Release, warnings as errors)
+            os: ubuntu-latest
+            configure: -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DSWARMGRID_WERROR=ON
+          - name: macOS Clang (Release)
+            os: macos-latest
+            configure: -DCMAKE_BUILD_TYPE=Release
+          - name: Windows MSVC (Release)
+            os: windows-latest
+            configure: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Same results on every platform
+        shell: bash
+        run: |
+          exe=build/swarmgrid
+          [ -f build/Release/swarmgrid.exe ] && exe=build/Release/swarmgrid.exe
+          "$exe" export-demos docs/data.js
+          git diff --exit-code -- docs/data.js
