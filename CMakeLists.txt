@@ -46,6 +46,8 @@ add_library(swarmgrid_core
   src/space_time_astar.cpp
   src/plan_io.cpp
   src/prioritized.cpp
+  src/conflicts.cpp
+  src/cbs.cpp
 )
 target_include_directories(swarmgrid_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(swarmgrid_core PRIVATE swarmgrid_warnings)
@@ -69,6 +71,8 @@ if(SWARMGRID_BUILD_TESTS)
     tests/test_space_time_astar.cpp
     tests/test_plan_io.cpp
     tests/test_prioritized.cpp
+    tests/test_conflicts.cpp
+    tests/test_cbs.cpp
   )
   target_link_libraries(swarmgrid_tests PRIVATE swarmgrid_core swarmgrid_warnings)
   target_include_directories(swarmgrid_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)

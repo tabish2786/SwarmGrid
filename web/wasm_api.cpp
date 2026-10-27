@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "swarmgrid/cbs.hpp"
 #include "swarmgrid/prioritized.hpp"
 #include "swarmgrid/warehouse_gen.hpp"
 
@@ -21,6 +22,8 @@ swarmgrid::Grid g_grid = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams
 std::vector<swarmgrid::CellId> g_starts;
 std::vector<swarmgrid::CellId> g_goals;
 swarmgrid::MultiAgentResult g_result;
+int g_ctNodes = 0;
+int g_limitReached = 0;
 std::string g_error;
 
 bool validAgent(int i) { return i >= 0 && i < static_cast<int>(g_starts.size()); }
@@ -68,12 +71,29 @@ EMSCRIPTEN_KEEPALIVE int sg_agent_count() { return static_cast<int>(g_starts.siz
 EMSCRIPTEN_KEEPALIVE int sg_agent_start(int i) { return validAgent(i) ? g_starts[static_cast<std::size_t>(i)] : -1; }
 EMSCRIPTEN_KEEPALIVE int sg_agent_goal(int i) { return validAgent(i) ? g_goals[static_cast<std::size_t>(i)] : -1; }
 
-// mode 0 = independent A*, 1 = prioritized planning.
-// Returns 1 if every agent got a path, 0 if planning failed (see sg_failed_agent), -1 if the
-// input was invalid (see sg_last_error).
-EMSCRIPTEN_KEEPALIVE int sg_plan(int mode) {
+// mode 0 = independent A*, 1 = prioritized planning, 2 = CBS (optimal; stops after
+// maxNodes constraint-tree nodes or timeLimitSeconds, see sg_limit_reached).
+// Returns 1 if every agent got a path, 0 if planning failed (see sg_failed_agent /
+// sg_limit_reached), -1 if the input was invalid (see sg_last_error).
+EMSCRIPTEN_KEEPALIVE int sg_plan_with_limits(int mode, int maxNodes, double timeLimitSeconds) {
     try {
         g_error.clear();
+        g_ctNodes = 0;
+        g_limitReached = 0;
+        if (mode == 2) {
+            swarmgrid::CbsOptions opts;
+            opts.maxNodes = maxNodes;
+            opts.timeLimitSeconds = timeLimitSeconds;
+            const swarmgrid::CbsResult r = swarmgrid::solveCbs(g_grid, g_starts, g_goals, opts);
+            g_result = swarmgrid::MultiAgentResult{};
+            g_result.solved = r.solved;
+            g_result.paths = r.paths;
+            g_result.attempts = 1;
+            g_result.expanded = r.lowLevelExpanded;
+            g_ctNodes = r.nodesExpanded;
+            g_limitReached = r.limitReached ? 1 : 0;
+            return r.solved ? 1 : 0;
+        }
         g_result = swarmgrid::planMultiAgent(
             g_grid, g_starts, g_goals,
             mode == 0 ? swarmgrid::MultiAgentMode::Independent : swarmgrid::MultiAgentMode::Prioritized);
@@ -84,6 +104,8 @@ EMSCRIPTEN_KEEPALIVE int sg_plan(int mode) {
         return -1;
     }
 }
+
+EMSCRIPTEN_KEEPALIVE int sg_plan(int mode) { return sg_plan_with_limits(mode, 20000, 3.0); }
 
 EMSCRIPTEN_KEEPALIVE int sg_path_length(int i) {
     return i >= 0 && i < static_cast<int>(g_result.paths.size())
@@ -97,6 +119,8 @@ EMSCRIPTEN_KEEPALIVE int sg_path_cell(int i, int t) {
 }
 
 EMSCRIPTEN_KEEPALIVE int sg_failed_agent() { return g_result.failedAgent; }
+EMSCRIPTEN_KEEPALIVE int sg_ct_nodes() { return g_ctNodes; }
+EMSCRIPTEN_KEEPALIVE int sg_limit_reached() { return g_limitReached; }
 EMSCRIPTEN_KEEPALIVE int sg_attempts() { return g_result.attempts; }
 EMSCRIPTEN_KEEPALIVE double sg_expanded() { return static_cast<double>(g_result.expanded); }
 EMSCRIPTEN_KEEPALIVE const char* sg_last_error() { return g_error.c_str(); }

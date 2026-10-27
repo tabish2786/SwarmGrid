@@ -7,6 +7,7 @@
 //   swarmgrid st-demo
 //   swarmgrid export-plan <file.map> <file.scen> <numAgents> <out.json>
 //   swarmgrid export-demos <out.js>
+//   swarmgrid cbs-bench [timeLimitSeconds]
 //
 // Later milestones add: solve, validate, bench, lifelong.
 
@@ -20,6 +21,8 @@
 #include <vector>
 
 #include "swarmgrid/ascii.hpp"
+#include "swarmgrid/cbs.hpp"
+#include "swarmgrid/conflicts.hpp"
 #include "swarmgrid/astar.hpp"
 #include "swarmgrid/grid.hpp"
 #include "swarmgrid/heuristic.hpp"
@@ -39,7 +42,8 @@ void printUsage() {
               << "  swarmgrid astar-bench [numQueries] [seed]\n"
               << "  swarmgrid st-demo\n"
               << "  swarmgrid export-plan <file.map> <file.scen> <numAgents> <out.json>\n"
-              << "  swarmgrid export-demos <out.js>\n";
+              << "  swarmgrid export-demos <out.js>\n"
+              << "  swarmgrid cbs-bench [timeLimitSeconds]\n";
 }
 
 // Strict integer argument: the whole text must be a number, otherwise an error that names the
@@ -314,6 +318,36 @@ swarmgrid::PlanExport prioritizedPlan(const swarmgrid::MapfInstance& inst, const
     return plan;
 }
 
+std::vector<swarmgrid::CellId> cellIds(const swarmgrid::Grid& g, const std::vector<swarmgrid::Point>& pts) {
+    std::vector<swarmgrid::CellId> out;
+    for (const swarmgrid::Point& p : pts) out.push_back(g.toId(p));
+    return out;
+}
+
+// Same instance, solved optimally with CBS and checked by the independent validator.
+swarmgrid::PlanExport cbsPlan(const swarmgrid::MapfInstance& inst, const std::string& id,
+                              const std::string& title) {
+    const auto starts = cellIds(inst.grid, inst.starts);
+    const auto goals = cellIds(inst.grid, inst.goals);
+    const swarmgrid::CbsResult r = swarmgrid::solveCbs(inst.grid, starts, goals);
+    if (!r.solved || !swarmgrid::validatePlan(inst.grid, starts, goals, r.paths).ok) {
+        throw std::runtime_error("CBS failed or produced an invalid plan for " + id);
+    }
+    swarmgrid::PlanExport plan;
+    plan.id = id;
+    plan.title = title;
+    plan.solver = "Conflict-Based Search (optimal sum of costs), checked by the independent validator.";
+    plan.note =
+        "Same robots again, now solved optimally with CBS: zero collisions and the lowest possible "
+        "sum of costs (" + std::to_string(r.sumOfCosts) + ", vs 212 for prioritized planning). CBS explored " +
+        std::to_string(r.nodesExpanded) + " constraint-tree nodes to prove it.";
+    plan.grid = inst.grid;
+    plan.starts = inst.starts;
+    plan.goals = inst.goals;
+    plan.paths = r.paths;
+    return plan;
+}
+
 // M2 showcase: four robots, each in its own corridor with its own constraints.
 swarmgrid::PlanExport constraintsPlan() {
     swarmgrid::PlanExport plan;
@@ -390,6 +424,7 @@ int runExportDemos(int argc, char** argv) {
         independentPlan(ten, "warehouse-10", "Warehouse, 10 robots (seed 42)"),
         prioritizedPlan(ten, "warehouse-10-prioritized",
                         "Warehouse, 10 robots, collision-free (prioritized)"),
+        cbsPlan(ten, "warehouse-10-cbs", "Warehouse, 10 robots, optimal (CBS)"),
         independentPlan(swarmgrid::generateRandomInstance(warehouse, 30, 7), "warehouse-30",
                         "Warehouse, 30 robots (seed 7)"),
         constraintsPlan(),
@@ -412,6 +447,55 @@ int runExportDemos(int argc, char** argv) {
     return 0;
 }
 
+// CBS vs prioritized planning on the generated warehouse: 10 random instances per fleet size.
+// Success and costs are deterministic; times depend on the machine.
+int runCbsBench(int argc, char** argv) {
+    double limit = 2.0;
+    if (argc >= 3) {
+        limit = std::stod(argv[2]);
+        if (!(limit > 0)) throw std::invalid_argument("timeLimitSeconds must be > 0");
+    }
+    const swarmgrid::Grid g = swarmgrid::generateWarehouse(swarmgrid::WarehouseParams{});
+    std::cout << "generated warehouse " << g.width() << " x " << g.height() << ", 10 instances per row, "
+              << "CBS time limit " << limit << " s\n"
+              << "robots | CBS solved | mean CBS time (s) | mean CT nodes | prioritized solved | "
+                 "CBS cost vs prioritized (both solved)\n";
+    for (int n : {5, 10, 15, 20, 25, 30}) {
+        int cbsSolved = 0, priSolved = 0, both = 0;
+        double cbsTime = 0;
+        long long nodes = 0, cbsCost = 0, priCost = 0;
+        for (std::uint32_t seed = 1; seed <= 10; ++seed) {
+            const swarmgrid::MapfInstance inst = swarmgrid::generateRandomInstance(g, n, seed);
+            const auto s = cellIds(g, inst.starts);
+            const auto t = cellIds(g, inst.goals);
+            swarmgrid::CbsOptions opts;
+            opts.timeLimitSeconds = limit;
+            opts.maxNodes = 1000000;
+            const swarmgrid::CbsResult c = swarmgrid::solveCbs(g, s, t, opts);
+            const swarmgrid::MultiAgentResult p =
+                swarmgrid::planMultiAgent(g, s, t, swarmgrid::MultiAgentMode::Prioritized);
+            if (c.solved) {
+                if (!swarmgrid::validatePlan(g, s, t, c.paths).ok) throw std::logic_error("invalid CBS plan");
+                ++cbsSolved;
+                cbsTime += c.seconds;
+                nodes += c.nodesExpanded;
+            }
+            if (p.solved) ++priSolved;
+            if (c.solved && p.solved) {
+                ++both;
+                cbsCost += c.sumOfCosts;
+                for (const auto& path : p.paths) priCost += static_cast<long long>(path.size()) - 1;
+            }
+        }
+        std::cout << n << " | " << cbsSolved << "/10 | "
+                  << (cbsSolved ? cbsTime / cbsSolved : 0.0) << " | "
+                  << (cbsSolved ? nodes / cbsSolved : 0) << " | " << priSolved << "/10 | ";
+        if (both) std::cout << cbsCost << " vs " << priCost;
+        std::cout << '\n';
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -428,6 +512,7 @@ int main(int argc, char** argv) {
         if (cmd == "st-demo") return runSpaceTimeDemo();
         if (cmd == "export-plan") return runExportPlan(argc, argv);
         if (cmd == "export-demos") return runExportDemos(argc, argv);
+        if (cmd == "cbs-bench") return runCbsBench(argc, argv);
         printUsage();
         return 1;
     } catch (const std::exception& e) {

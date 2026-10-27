@@ -52,7 +52,8 @@
         </div>
         <label for="planner">Planner
           <select id="planner">
-            <option value="1" selected>Prioritized (no collisions)</option>
+            <option value="2" selected>CBS (optimal)</option>
+            <option value="1">Prioritized (fast)</option>
             <option value="0">Independent A* (may collide)</option>
           </select>
         </label>
@@ -95,6 +96,7 @@
           <div class="tile" id="tile-hit"><div class="k">Collisions</div><div class="v" id="st-hit">&ndash;</div><div class="s" id="st-hit-s"></div></div>
           <div class="tile"><div class="k">Planning time</div><div class="v" id="st-ms">&ndash;</div><div class="s" id="st-ms-s">on this device</div></div>
         </div>
+        <p class="small" id="compare"></p>
       </section>
 
       <section class="card" aria-label="Selected robot">
@@ -113,7 +115,7 @@
           <li>Pick a robot above (or tap it on the map, or press 0&ndash;9).</li>
           <li>Tap any free cell: the robot drives there. Everyone else replans around it.</li>
           <li>Switch to <b>Tap = place robot</b> to put it somewhere else first.</li>
-          <li>Switch the planner to <b>Independent A*</b> to see what happens without coordination.</li>
+          <li>Compare planners: <b>CBS</b> is optimal, <b>Prioritized</b> is faster, <b>Independent A*</b> shows what happens without coordination.</li>
         </ol>
       </section>
 
@@ -121,10 +123,12 @@
         <h2>How it works</h2>
         <p style="margin:0">
           Every tap reruns the project's C++ planner, compiled to WebAssembly, on your device.
-          <b>Prioritized planning</b> plans robots one by one with space-time A*; each robot avoids
-          the ones planned before it, including robots parked on their goals. It is fast but not
-          optimal, and it can fail on a solvable layout. When it does, the page keeps the old plan
-          and tells you which robot got stuck. Conflict-Based Search (milestone M4) will be optimal.
+          <b>CBS</b> (Conflict-Based Search) finds the collision-free plan with the lowest total
+          time: it plans each robot alone, finds the first collision, and branches on which of the two
+          robots has to avoid it, until a plan has no collisions. It is optimal but can get slow, so
+          the page stops it after 20,000 tree nodes. <b>Prioritized planning</b> plans robots one by
+          one, each avoiding the ones before it: fast, but not optimal, and it can fail on a solvable
+          layout. If a planner fails, the page keeps the old plan and says why.
         </p>
       </section>
     </aside>
@@ -172,17 +176,28 @@
 
   // ---------- planner ----------
 
+  function plannerMode() { return Number($("planner").value); }
+
   function plannerName() {
-    return Number($("planner").value) === 1 ? "prioritized planning" : "independent A*";
+    return ["independent A*", "prioritized planning", "CBS (optimal)"][plannerMode()];
   }
 
-  // Runs the C++ planner on the given starts/goals.
+  function sumOfCosts(M) {
+    let s = 0;
+    for (let i = 0; i < N; i++) s += M._sg_path_length(i) - 1;
+    return s;
+  }
+
+  // Runs the C++ planner on the given starts/goals. CBS runs on the page's main thread and is
+  // capped at 20,000 constraint-tree nodes / 3 s (see web/wasm_api.cpp).
   function runPlanner(starts, goals) {
     const M = state.M;
     M._sg_clear_agents();
     for (let i = 0; i < N; i++) M._sg_add_agent(starts[i], goals[i]);
+    const mode = plannerMode();
     const t0 = performance.now();
-    const status = M._sg_plan(Number($("planner").value));
+    const status = M._sg_plan(mode);
+    const ms = performance.now() - t0;
     let paths = null;
     if (status === 1) {
       paths = [];
@@ -196,20 +211,28 @@
         paths.push(p);
       }
     }
-    return {
-      status, paths, ms: performance.now() - t0,
+    const res = {
+      status, paths, ms, mode,
       attempts: M._sg_attempts(), failed: M._sg_failed_agent(),
+      ctNodes: M._sg_ct_nodes(), limitReached: M._sg_limit_reached() === 1,
       error: status < 0 ? M.UTF8ToString(M._sg_last_error()) : "",
+      prioritizedCost: null,
     };
+    // For CBS, also ask prioritized planning, to show what optimality buys.
+    if (status === 1 && mode === 2 && M._sg_plan(1) === 1) res.prioritizedCost = sumOfCosts(M);
+    return res;
   }
 
   // Plans new starts/goals. On failure the previous plan stays, so the robots never jump.
   function tryReplan(starts, goals) {
     const res = runPlanner(starts, goals);
     if (res.status !== 1) {
-      setMessage(res.status === 0
-        ? `No collision-free plan for that: robot ${res.failed} got stuck. Prioritized planning can miss solutions; try another cell.`
-        : `Planner error: ${res.error}`);
+      let why;
+      if (res.status < 0) why = `Planner error: ${res.error}`;
+      else if (res.mode === 2 && res.limitReached) why = `CBS stopped after ${res.ctNodes.toLocaleString("en-US")} constraint-tree nodes without finishing. Try another cell, or the prioritized planner.`;
+      else if (res.mode === 2) why = "CBS proved there is no solution for that layout.";
+      else why = `No collision-free plan for that: robot ${res.failed} got stuck. Prioritized planning can miss solutions; try another cell or CBS.`;
+      setMessage(why);
       return false;
     }
     setMessage("");
@@ -285,9 +308,16 @@
     $("st-hit-s").textContent = `${count("vertex")} vertex · ${count("edge")} swap · ${count("target")} target`;
     $("tile-hit").className = "tile " + (p.collisions.length ? "bad" : "good");
     $("st-ms").textContent = res.ms < 10 ? res.ms.toFixed(1) + " ms" : Math.round(res.ms) + " ms";
-    $("st-ms-s").textContent = Number($("planner").value) === 1
-      ? `on this device · ${res.attempts} priority order${res.attempts === 1 ? "" : "s"} tried`
-      : "on this device";
+    $("st-ms-s").textContent = res.mode === 2
+      ? `on this device · ${res.ctNodes.toLocaleString("en-US")} constraint-tree nodes`
+      : res.mode === 1
+        ? `on this device · ${res.attempts} priority order${res.attempts === 1 ? "" : "s"} tried`
+        : "on this device";
+    const extra = res.prioritizedCost === null ? 0 : res.prioritizedCost - p.sumOfCosts;
+    $("compare").textContent = res.mode !== 2 ? ""
+      : res.prioritizedCost === null ? "Optimal: no collision-free plan has a lower sum of costs."
+      : `Optimal: no collision-free plan has a lower sum of costs. Prioritized planning needs ${res.prioritizedCost}` +
+        (extra > 0 ? ` (+${extra}).` : " here too.");
     $("time").max = String(p.makespan);
     $("status").textContent = `Planner: C++ compiled to WebAssembly · ${plannerName()} · ${N} robots`;
     $("map").setAttribute("aria-label", `Warehouse with ${N} robots, ${p.collisions.length} collisions in the current plan`);

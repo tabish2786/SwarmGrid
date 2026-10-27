@@ -4,8 +4,8 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 
+#include "swarmgrid/conflicts.hpp"
 #include "swarmgrid/constraints.hpp"
 #include "swarmgrid/heuristic.hpp"
 #include "swarmgrid/space_time_astar.hpp"
@@ -13,30 +13,6 @@
 namespace swarmgrid {
 
 namespace {
-
-void validate(const Grid& grid, const std::vector<CellId>& starts,
-              const std::vector<CellId>& goals, int maxAttempts) {
-    if (starts.empty() || starts.size() != goals.size()) {
-        throw std::invalid_argument("planMultiAgent: need the same, non-zero number of starts and goals");
-    }
-    if (maxAttempts < 1) {
-        throw std::invalid_argument("planMultiAgent: maxAttempts must be >= 1");
-    }
-    std::unordered_set<CellId> seenStarts;
-    std::unordered_set<CellId> seenGoals;
-    for (std::size_t i = 0; i < starts.size(); ++i) {
-        for (CellId c : {starts[i], goals[i]}) {
-            if (c < 0 || c >= grid.numCells() || !grid.isFree(c)) {
-                throw std::invalid_argument("planMultiAgent: agent " + std::to_string(i) +
-                                            " has a start or goal that is not a free cell");
-            }
-        }
-        if (!seenStarts.insert(starts[i]).second || !seenGoals.insert(goals[i]).second) {
-            throw std::invalid_argument("planMultiAgent: agent " + std::to_string(i) +
-                                        " shares its start or goal with another agent");
-        }
-    }
-}
 
 // Turns a planned path into the constraints every later agent must respect.
 void reserve(ConstraintTable& table, const Path& path) {
@@ -57,7 +33,8 @@ void reserve(ConstraintTable& table, const Path& path) {
 MultiAgentResult planMultiAgent(const Grid& grid, const std::vector<CellId>& starts,
                                 const std::vector<CellId>& goals, MultiAgentMode mode,
                                 int maxAttempts) {
-    validate(grid, starts, goals, maxAttempts);
+    requireValidAgents(grid, starts, goals, "planMultiAgent");
+    if (maxAttempts < 1) throw std::invalid_argument("planMultiAgent: maxAttempts must be >= 1");
     const std::size_t n = starts.size();
 
     // One BFS table per goal, reused by every attempt: this is where precomputing pays off.
