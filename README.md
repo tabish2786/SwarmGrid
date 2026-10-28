@@ -3,10 +3,11 @@
 [![CI](https://github.com/tabish2786/SwarmGrid/actions/workflows/ci.yml/badge.svg)](https://github.com/tabish2786/SwarmGrid/actions/workflows/ci.yml)
 
 Multi-Agent Path Finding (MAPF) for a warehouse robot fleet, in C++17: optimal Conflict-Based
-Search with MDD conflict prioritization and bypass, bounded-suboptimal ECBS, prioritized planning,
-optimal (Hungarian) order assignment, and a lifelong simulator with rolling-horizon replanning,
-deadlock recovery and robot breakdowns. The only dependency is vendored
-[doctest](https://github.com/doctest/doctest). The same C++ runs in the browser through WebAssembly.
+Search with MDD conflict prioritization, bypass and a machine-learned conflict ranker,
+bounded-suboptimal ECBS, prioritized planning, optimal (Hungarian) order assignment, and a lifelong
+simulator with rolling-horizon replanning, deadlock recovery and robot breakdowns. The only
+dependency is vendored [doctest](https://github.com/doctest/doctest). The same C++ runs in the
+browser through WebAssembly and in Python as `import swarmgrid` ([Python package](#python-package)).
 
 <p align="center">
   <img src="docs/demo.gif" width="640" alt="20 robots in a generated warehouse fetching parcels; each parcel is assigned by the Hungarian algorithm and the fleet is replanned with ECBS at every pickup, with zero collisions">
@@ -43,9 +44,16 @@ station, then gets the next order. The measure there is **throughput**, orders d
 | Prioritized planning | Robots planned one by one, each avoiding the paths before it; on failure the stuck robot moves to the front and planning restarts. Fast, not optimal, not complete. | `prioritized` |
 | CBS | Constraint tree searched best-first on sum of costs. Each node: one path per robot; split on a conflict, forbid it for one robot per child, replan only that robot. Optimal. | `cbs` |
 | M5: MDD + bypass | Multi-valued decision diagrams of each robot's optimal paths classify conflicts as cardinal (both children must get more expensive), semi-cardinal or non-cardinal; CBS splits on cardinal ones first. Bypass: a child with the same cost and fewer conflicts replaces the parent's path instead of branching. Still optimal. | `mdd`, `cbs` |
+| ML conflict ranking | A linear model scores 18 integer features of every conflict (type, MDD cardinality, MDD widths, time, path costs, delays, constraint counts, goal distances) and CBS splits the best one. It is trained offline to imitate an oracle that splits every conflict for real and keeps the one that raises the lower bound most (pairwise logistic regression, one DAgger round). Fixed-point integer weights make the choice identical on every platform. Still optimal. | `conflict_ranking`, `cbs`, `scripts/train_conflict_ranker.py` |
 | M6: ECBS | Focal search at both levels: any path or tree node within *w* × the current lower bound may be chosen, and among those the one with the fewest conflicts wins. Sum of costs ≤ *w* × optimal, guaranteed. | `ecbs` |
 | Assignment | Greedy nearest pair, or optimal Hungarian (O(n³) shortest augmenting paths), both on true grid distances. | `task_assignment` |
 | M8: Lifelong (RHCR) | Every *h* steps, replan the fleet but resolve conflicts only in the first *w* steps; execute *h* steps; repeat. Planner failures fall back to windowed prioritized planning, then to "everyone waits". A robot that makes no progress for 40 steps is sent to a nearby free cell, then resumes. Breakdowns turn a robot into a temporary shelf. | `lifelong` |
+
+CBS stores each constraint-tree node as a delta from its parent (the new constraint and the
+replanned path) and rebuilds a node's full state only when it is expanded. Copying every path into
+every node cost 3.61 KB per node and got a 60-second benchmark run killed at 5.3 GB; with deltas the
+same run peaks at 352 MB (0.28 KB per node) and expands about 7% more nodes per second, with
+exactly the same search decisions (the tests pin the node counts).
 
 Everything is deterministic: a portable RNG (no `std::uniform_int_distribution`, whose output
 differs between standard libraries), fixed neighbour order, and explicit tie-breaking in every
@@ -76,6 +84,7 @@ flowchart LR
   STA --> CBS
   FOC --> ECBS
   MDD[MDD builder] --> CBS
+  RANK[Learned conflict ranker<br/>fixed-point linear model] --> CBS
   CONF[Conflict detector<br/>vertex / edge / target, windowed] --> CBS
   CONF --> ECBS
   PP --> VAL[Independent validator]
@@ -91,6 +100,7 @@ flowchart LR
   RHCR --> OUT
   OUT --> PLOT[scripts/plot_bench.py<br/>SVG charts + tables]
   high --> WASM[WebAssembly build<br/>web/wasm_api.cpp]
+  high --> PY[Python package<br/>pybind11: import swarmgrid]
   WASM --> WORKER[Web Worker] --> PAGE[docs/control.html]
   OUT --> DASH[docs/index.html]
 ```
@@ -126,6 +136,34 @@ instances per fleet size, 60 s per solve (see Limitations: not the MovingAI map)
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/bench/runtime-dark.svg">
   <img src="docs/bench/runtime.svg" width="720" alt="Line chart, log scale: median planning time of solved instances by fleet size for each planner; prioritized is fastest, ECBS reaches about 0.3 s at 100 robots.">
+</picture>
+
+
+**ML-guided CBS:** which conflict CBS splits never changes the (optimal) answer, only the size of
+the search. Compared on 25 instances per fleet size, 60 s each, on both generated maps; the ranker
+was trained on the same two maps but on different instances (seeds 1001-1060), so this says nothing
+yet about other maps.
+
+- **Dense small warehouse (27 × 21, 1-wide aisles), 25 robots:** solved within 60 s: plain CBS 4,
+  CBS + M5 10, **CBS + ML 15**, oracle 11 (of 25).
+- **Same map, 20 robots:** the learned ranker needed fewer nodes than the M5 rule on 21 of the 23
+  instances both solved (2 more), median 2.86× fewer per instance; median time 524 → 135 ms.
+- **Roomy large warehouse (100 × 36):** no change in what gets solved (24/25 at 30 and 50 robots, as
+  M5; 0/25 at 100), and mixed instance by instance: at 50 robots fewer nodes on 15 instances and more
+  on 8; at 30 robots a single instance went from 204 nodes (M5) to 9,968 (ML), which makes that row's
+  total ten times worse even though the median instance was 3% better.
+- **The oracle** it imitates pays two low-level searches per conflict at every node. It was slower
+  than the learned ranker at every fleet size (median 2.0 s vs 0.46 s at 25 robots on the small map),
+  its trees were not consistently smaller, and it solved fewer instances at 25 robots (11 vs 15).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/bench/ml-success-dark.svg">
+  <img src="docs/bench/ml-success.svg" width="720" alt="Line chart, small warehouse: share of 25 instances solved within 60 s by fleet size for plain CBS, CBS with M5, CBS with the learned ranker and CBS with the oracle. At 25 robots: 16%, 40%, 60% and 44%.">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/bench/ml-wins-dark.svg">
+  <img src="docs/bench/ml-wins.svg" width="720" alt="Stacked bar chart: on each map and fleet size, how many instances solved by both needed fewer, the same, or more CT nodes with the learned ranker than with the M5 rule. Small map, 20 robots: 21 fewer, 2 more. Large map, 50 robots: 15 fewer, 1 same, 8 more.">
 </picture>
 
 
@@ -233,26 +271,69 @@ Cell: solved / instances · median seconds over the solved ones.
 | 40 | 1.188 | 1.192 | +0.4% | 6/10 | -2.7% … +2.4% | 6.47 → 6.33 (-2.1%) |
 | 50 | 1.455 | 1.468 | +0.9% | 7/10 | -0.7% … +4.3% | 5.93 → 5.84 (-1.5%) |
 
+### Learned conflict selection (CBS + ML)
+
+Same optimal plans, different trees. 60 s per solve; instance seeds 1-25 (the ranker was trained on seeds 1001-1060). M5 = cardinal rule, ML = shipped ranker, oracle = split every conflict for real.
+
+| map | robots | solved: CBS (M4) / CBS + M5 / CBS + ML / CBS + oracle | ML vs M5 on instances both solved: fewer / same / more nodes | median per-instance node ratio M5/ML | total nodes M5 → ML | median time M5 → ML |
+|---|---|---|---|---|---|---|
+| generated-large | 10 | – / 25 / 25 / 25 of 25 | 2 / 22 / 1 | 1.00× | 74 → 73 | 1.3 → 1.4 ms |
+| generated-large | 20 | – / 25 / 25 / 25 of 25 | 7 / 12 / 6 | 1.00× | 2,271 → 2,028 | 6.2 → 6.4 ms |
+| generated-large | 30 | – / 24 / 24 / 24 of 25 | 12 / 5 / 7 | 1.03× | 991 → 10,767 | 20.4 → 20.8 ms |
+| generated-large | 50 | – / 24 / 24 / 23 of 25 | 15 / 1 / 8 | 1.06× | 14,096 → 3,891 | 202.3 → 199.8 ms |
+| generated-large | 100 | – / 0 / 0 / 0 of 25 | – | – | – | – |
+| generated-small | 10 | 23 / 25 / 25 / 25 of 25 | 9 / 10 / 6 | 1.00× | 978 → 966 | 0.9 → 1.0 ms |
+| generated-small | 15 | 20 / 25 / 25 / 24 of 25 | 14 / 3 / 8 | 1.14× | 742,239 → 89,351 | 3.8 → 3.9 ms |
+| generated-small | 20 | 6 / 23 / 23 / 23 of 25 | 21 / 0 / 2 | 2.86× | 172,586 → 56,470 | 523.7 → 134.9 ms |
+| generated-small | 25 | 4 / 10 / 15 / 11 of 25 | 7 / 0 / 3 | 1.82× | 455,935 → 258,831 | 998.8 → 437.1 ms |
 </details>
 
 
 ## How it is checked
 
-- **Unit tests** (doctest, 107 test cases): `ctest` runs them; CI runs them on Linux GCC with
+- **Unit tests** (doctest, 114 test cases): `ctest` runs them; CI runs them on Linux GCC with
   AddressSanitizer + UBSan and warnings as errors, Linux Clang with warnings as errors, macOS and
-  Windows MSVC.
-- **Optimality.** CBS, every M5 variant (prioritization only, bypass only, both) and ECBS with
-  *w* = 1 are compared on 60 random small instances with an independent brute-force optimum:
+  Windows MSVC. The Python package has its own 15 tests (`tests/python`), which also check that
+  Python returns exactly the C++ golden numbers; CI builds the package and runs them.
+- **Optimality.** CBS with every conflict selection (first, cardinal, learned, oracle; with and
+  without bypass) and ECBS with *w* = 1 are compared on random small instances with an independent
+  brute-force optimum:
   Dijkstra over the joint state of all robots, sharing no code with the planners
   (`tests/mapf_reference.hpp`). ECBS with *w* = 1.1 and 1.5 must stay within its bound and above
   the optimum.
 - **MDDs** are compared level by level with brute-force enumeration of every timed path
-  (`tests/test_mdd.cpp`). **Hungarian** is compared with brute force over every matching on 200
-  random cases.
+  (`tests/test_mdd.cpp`), and against real splits: on conflicts recorded from three 15-robot
+  instances, the MDD's "cardinal" must mean both children got dearer when split for real,
+  "semi-cardinal" exactly one, "non-cardinal" none (two independent computations,
+  `tests/test_conflict_ranking.cpp`).
+- **Hungarian** is compared with brute force over every matching on 200 random cases.
 - **Every plan** in tests, benchmarks and demos goes through `validatePlan`, which re-checks moves,
   obstacles and all three conflict types without touching the search code. The lifelong tests
   re-check every executed step from the recorded positions.
 - **Determinism.** CI regenerates `docs/data.js` on every platform and fails if one byte differs.
+
+## Python package
+
+```bash
+pip install "git+https://github.com/tabish2786/SwarmGrid.git"    # needs a C++17 compiler
+```
+
+```python
+import swarmgrid as sg
+
+grid = sg.warehouse()                                  # 27 x 21 generated warehouse
+starts, goals = sg.random_agents(grid, 10, seed=42)    # same robots as the web demo
+plan = sg.solve(grid, starts, goals)                   # optimal CBS: sum of costs 208
+plan = sg.solve(grid, starts, goals, conflict_selection="learned")   # same cost, ML-picked splits
+plan = sg.solve(grid, starts, goals, "ecbs", weight=1.2)
+stats = sg.simulate_lifelong(grid, robots=30, steps=500, window=10, assignment="hungarian")
+```
+
+Everything the C++ core does is there: CBS (every conflict selection), ECBS, prioritized planning,
+validation, Hungarian assignment, the lifelong simulator, and `conflict_samples` to train your own
+ranker. Solves release the GIL. Full guide and API: [python/README.md](python/README.md); examples in
+[python/examples](python/examples). The distribution name is `swarmgrid-mapf` (`swarmgrid` on PyPI is
+an unrelated project); `.github/workflows/wheels.yml` builds wheels for PyPI.
 
 ## Build and run
 
@@ -282,6 +363,7 @@ Time anything only in a Release build. CMake options: `SWARMGRID_BUILD_TESTS` (O
 ./build/swarmgrid lifelong --robots 30 --breakdown-rate 0.002      # with breakdowns
 ./build/swarmgrid bench --help                    # M7 options
 ./build/swarmgrid lifelong-bench --help
+./build/swarmgrid ml-data --help                  # training data for the conflict ranker
 ```
 
 ### Reproducing the benchmarks
@@ -294,6 +376,21 @@ for i in 0 1 2; do ./build/swarmgrid bench --out large-$i.csv --generated large 
     --solvers ecbs,pp --assign greedy,hungarian --seeds 10
 pip install matplotlib
 python3 scripts/plot_bench.py --bench large-*.csv --lifelong lifelong.csv --out docs/bench
+```
+
+The conflict-selection comparison and the ranker's training (exact commands for the shipped model
+in [models/README.md](models/README.md)):
+
+```bash
+for i in 0 1 2; do
+  ./build/swarmgrid bench --out ml-large-$i.csv --generated large --agents 10,20,30,50,100 \
+      --algos cbs-m5,cbs-ml,cbs-oracle --shard $i/3 &
+done; wait
+for i in 0 1 2; do
+  ./build/swarmgrid bench --out ml-small-$i.csv --generated small --agents 10,15,20,25 \
+      --algos cbs,cbs-m5,cbs-ml,cbs-oracle --shard $i/3 &
+done; wait
+python3 scripts/plot_bench.py --ml ml-*.csv --out docs/bench
 ```
 
 On the real MovingAI warehouse map: download `warehouse-10-20-10-2-1.map` and its 25 random
@@ -324,7 +421,11 @@ each scenario file are used, as is standard.
 include/swarmgrid/   public headers, one per module
 src/                 implementations; main.cpp + bench_cli.cpp are the CLI
 tests/               doctest tests, one file per module; mapf_reference.hpp = brute-force optimum
-scripts/             plot_bench.py (charts + tables from the benchmark CSVs)
+tests/python/        tests of the Python package
+python/              Python package (swarmgrid/), pybind11 bindings (src/), docs, examples
+models/              the trained conflict ranker and how it was made
+scripts/             plot_bench.py (charts + tables), train_conflict_ranker.py (numpy)
+pyproject.toml       Python build (scikit-build-core); LICENSE: MIT
 docs/                dashboard, robot control page, Web Worker, charts (docs/bench), demo GIF
 web/                 WebAssembly interface + build script
 data/                a tiny MovingAI-format map and scenario for the tests
@@ -342,6 +443,9 @@ third_party/doctest/ single-header test framework
   heuristic: the techniques in CBSH2-RTC that make modern CBS much faster are missing. The M5 gain
   is concentrated on hard instances; on the median instance the tree size barely changes (see the
   table).
+- **The learned conflict ranker** is a linear model trained on two generated maps. It is not
+  uniformly better than the M5 rule: see the instance-by-instance count in the results. Retrain it
+  for very different maps (models/README.md).
 - **ECBS** has no bypass and is not EECBS. On the small 27 × 21 map with 1-wide aisles, 50 robots
   need *w* = 1.5 to solve reliably (with *w* = 1.2, 5 of 10 instances finished within 5 s).
 - **The lifelong model is simplified:** unit-time moves, no turning, acceleration or robot size,
@@ -363,4 +467,4 @@ The test map is in MovingAI format; the format and benchmark maps are from the
 values are octile (8-connected) distances, so they do **not** equal 4-connected shortest paths.
 
 References: Sharon et al. 2015 (CBS); Boyarski et al. 2015 (ICBS: conflict prioritization,
-bypass); Barer et al. 2014 (ECBS); Li et al. 2021 (RHCR); Kuhn 1955 / Munkres 1957 (Hungarian).
+bypass); Huang, Koenig & Dilkina 2021 (learning to resolve conflicts in CBS); Barer et al. 2014 (ECBS); Li et al. 2021 (RHCR); Kuhn 1955 / Munkres 1957 (Hungarian).

@@ -131,7 +131,7 @@ EMSCRIPTEN_KEEPALIVE void sg_set_ecbs_weight(double w) { g_ecbsWeight = w < 1.0 
 // mode 0 = independent A*, 1 = prioritized planning, 2 = CBS (optimal, with the M5
 // improvements; stops after maxNodes constraint-tree nodes or timeLimitSeconds, see
 // sg_limit_reached), 3 = ECBS (sum of costs <= weight * optimal, same limits; see
-// sg_lower_bound).
+// sg_lower_bound), 4 = CBS with the learned conflict ranker (conflict_ranking.hpp; also optimal).
 // Returns 1 if every agent got a path, 0 if planning failed (see sg_failed_agent /
 // sg_limit_reached), -1 if the input was invalid (see sg_last_error).
 EMSCRIPTEN_KEEPALIVE int sg_plan_with_limits(int mode, int maxNodes, double timeLimitSeconds) {
@@ -156,10 +156,11 @@ EMSCRIPTEN_KEEPALIVE int sg_plan_with_limits(int mode, int maxNodes, double time
             g_lowerBound = static_cast<double>(r.lowerBound);
             return r.solved ? 1 : 0;
         }
-        if (mode == 2) {
+        if (mode == 2 || mode == 4) {
             swarmgrid::CbsOptions opts;
             opts.maxNodes = maxNodes;
             opts.timeLimitSeconds = timeLimitSeconds;
+            if (mode == 4) opts.selection = swarmgrid::ConflictSelection::Learned;
             const swarmgrid::CbsResult r = swarmgrid::solveCbs(g_grid, g_starts, g_goals, opts);
             g_result = swarmgrid::MultiAgentResult{};
             g_result.solved = r.solved;

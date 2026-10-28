@@ -148,7 +148,8 @@
   const setMessage = (text, kind) => { $("msg").textContent = text; $("msg").classList.toggle("info", kind === "info"); };
   const plannerMode = () => Number($("planner").value);
   const ecbsWeight = () => Number($("weight").value);
-  const plannerName = (mode) => mode === 3 ? `ECBS (w = ${ecbsWeight()})`
+  const plannerName = (mode) => mode === 4 ? "CBS + ML conflict order (optimal)"
+    : mode === 3 ? `ECBS (w = ${ecbsWeight()})`
     : ["independent A*", "prioritized planning", "CBS (optimal)"][mode];
   const isWorking = (r) => !state.broken.has(r);
   const robotIds = () => [...Array(state.n).keys()];
@@ -217,7 +218,7 @@
     if (res.status < 0) return `Planner error: ${res.error}`;
     const name = res.mode === 3 ? "ECBS" : "CBS";
     if (res.mode >= 2 && res.limitReached) {
-      return `${name} stopped after ${res.ctNodes.toLocaleString("en-US")} constraint-tree nodes without finishing. Try another cell, ${res.mode === 2 ? "ECBS, " : "a larger w, "}or the prioritized planner.`;
+      return `${name} stopped after ${res.ctNodes.toLocaleString("en-US")} constraint-tree nodes without finishing. Try another cell, ${res.mode === 3 ? "a larger w, " : "ECBS, "}or the prioritized planner.`;
     }
     if (res.mode >= 2) return `${name} proved there is no collision-free plan for that.`;
     if (res.mode === 1 && res.failed >= 0) {
@@ -584,7 +585,7 @@
     buildRobotButtons();
     select(0);
     const notes = [];
-    if (n > 10 && plannerMode() === 2) {
+    if (n > 10 && (plannerMode() === 2 || plannerMode() === 4)) {
       $("planner").value = "3";
       notes.push("switched to ECBS: CBS is optimal but gets slow on a crowded floor");
     }
@@ -669,7 +670,7 @@
     const extra = prioritizedCost === null ? 0 : prioritizedCost - p.sumOfCosts;
     const vsPrioritized = prioritizedCost === null ? ""
       : ` Prioritized planning needs ${prioritizedCost}` + (extra > 0 ? ` (+${extra}).` : extra < 0 ? ` (${extra}).` : " here too.");
-    $("compare").textContent = res.mode === 2
+    $("compare").textContent = res.mode === 2 || res.mode === 4
       ? "Optimal: no collision-free plan has a lower sum of costs." + vsPrioritized
       : res.mode === 3
       ? `Bounded: no plan can beat ${res.lowerBound}, so this one (${p.sumOfCosts}) is at most ` +

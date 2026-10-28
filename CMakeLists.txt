@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SwarmGrid VERSION 0.1.0 LANGUAGES CXX)
+project(SwarmGrid VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(SWARMGRID_BUILD_TESTS "Build unit tests" ON)
+option(SWARMGRID_BUILD_CLI "Build the swarmgrid command-line tool" ON)
+option(SWARMGRID_BUILD_PYTHON "Build the Python module swarmgrid._core (pybind11; pip install . sets this)" OFF)
 option(SWARMGRID_WERROR "Treat warnings as errors" OFF)
 option(SWARMGRID_SANITIZE "Enable ASan + UBSan (GCC/Clang only)" OFF)
 
@@ -48,6 +50,7 @@ add_library(swarmgrid_core
   src/prioritized.cpp
   src/conflicts.cpp
   src/mdd.cpp
+  src/conflict_ranking.cpp
   src/cbs.cpp
   src/ecbs.cpp
   src/task_assignment.cpp
@@ -57,8 +60,23 @@ target_include_directories(swarmgrid_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
 target_link_libraries(swarmgrid_core PRIVATE swarmgrid_warnings)
 
 # ---- CLI ----
-add_executable(swarmgrid src/main.cpp src/bench_cli.cpp)
-target_link_libraries(swarmgrid PRIVATE swarmgrid_core swarmgrid_warnings)
+if(SWARMGRID_BUILD_CLI)
+  add_executable(swarmgrid src/main.cpp src/bench_cli.cpp)
+  target_link_libraries(swarmgrid PRIVATE swarmgrid_core swarmgrid_warnings)
+endif()
+
+# ---- Python module (built by pip through scikit-build-core, see pyproject.toml) ----
+if(SWARMGRID_BUILD_PYTHON)
+  if(CMAKE_VERSION VERSION_LESS 3.18)
+    message(FATAL_ERROR "The Python module needs CMake 3.18 or newer")
+  endif()
+  set_target_properties(swarmgrid_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+  find_package(pybind11 CONFIG REQUIRED)
+  pybind11_add_module(_core MODULE python/src/bindings.cpp)
+  target_link_libraries(_core PRIVATE swarmgrid_core)
+  install(TARGETS _core LIBRARY DESTINATION swarmgrid)
+endif()
 
 # ---- tests ----
 if(SWARMGRID_BUILD_TESTS)
@@ -78,6 +96,7 @@ if(SWARMGRID_BUILD_TESTS)
     tests/test_conflicts.cpp
     tests/test_mdd.cpp
     tests/test_cbs.cpp
+    tests/test_conflict_ranking.cpp
     tests/test_ecbs.cpp
     tests/test_task_assignment.cpp
     tests/test_lifelong.cpp

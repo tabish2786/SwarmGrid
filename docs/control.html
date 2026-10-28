@@ -66,6 +66,7 @@
         <label for="planner">Planner
           <select id="planner">
             <option value="2" selected>CBS (optimal)</option>
+            <option value="4">CBS + ML conflict order (optimal)</option>
             <option value="3">ECBS (bounded, scales)</option>
             <option value="1">Prioritized (fast)</option>
             <option value="0">Independent A* (may collide)</option>
@@ -185,7 +186,9 @@
           it plans each robot alone, finds a collision, and branches on which of the two robots has to
           avoid it. It first picks <i>cardinal</i> collisions (found with MDDs: every shortest path of
           both robots uses that cell) and <i>bypasses</i> branches that cost nothing, which cuts the
-          search tree a lot. <b>ECBS</b> allows a plan up to <i>w</i> times the optimum and in return
+          search tree a lot. <b>CBS + ML</b> picks the conflict with a small model trained to imitate an
+          expensive "try every split" oracle: the same optimal plan, sometimes with a much smaller tree,
+          sometimes with a bigger one. <b>ECBS</b> allows a plan up to <i>w</i> times the optimum and in return
           prefers paths that collide less, so it handles far more robots. <b>Prioritized planning</b>
           plans robots one by one: fast, not optimal, and it can fail on a solvable layout.
         </p>

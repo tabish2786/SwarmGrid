@@ -29,6 +29,8 @@ SERIES = {
     "cbs-m5": ("CBS + M5", "#1baf7a", "#199e70"),
     "ecbs-1.05": ("ECBS w=1.05", "#eda100", "#c98500"),
     "ecbs-1.2": ("ECBS w=1.2", "#e87ba4", "#d55181"),
+    "cbs-ml": ("CBS + ML", "#6250d6", "#9085e9"),
+    "cbs-oracle": ("CBS + oracle", "#008300", "#008300"),
 }
 LIFELONG_SOLVER = {"pp": "pp", "ecbs": "ecbs-1.2"}  # lifelong ECBS runs with w = 1.2
 THEMES = {
@@ -71,7 +73,7 @@ def style(ax, fig, theme):
     ax.yaxis.label.set_color(t["muted"])
 
 
-def finish(fig, ax, theme, title, subtitle, path, legend=True):
+def finish(fig, ax, theme, title, subtitle, path, legend=True, left=0.09):
     t = THEMES[theme]
     fig.text(0.01, 0.97, title, color=t["text"], fontsize=12, fontweight="bold", va="top")
     fig.text(0.01, 0.90, subtitle, color=t["muted"], fontsize=9, va="top")
@@ -80,7 +82,7 @@ def finish(fig, ax, theme, title, subtitle, path, legend=True):
                         handlelength=1.6, columnspacing=1.2)
         for txt in leg.get_texts():
             txt.set_color(t["text"])
-    fig.subplots_adjust(left=0.09, right=0.98, top=0.74, bottom=0.14)
+    fig.subplots_adjust(left=left, right=0.98, top=0.74, bottom=0.14)
     fig.savefig(path, format="svg", facecolor=t["surface"])
     plt.close(fig)
 
@@ -368,10 +370,107 @@ def lifelong_charts(rows, out):
     return "\n".join(md) + "\n", gains
 
 
+def ml_charts(rows, out):
+    """CBS conflict selection: plain vs M5 (cardinal) vs learned ranker vs oracle."""
+    variants = [a for a in ("cbs", "cbs-m5", "cbs-ml", "cbs-oracle") if any(r["algorithm"] == a for r in rows)]
+    scen = defaultdict(dict)  # (map, agents, scenario) -> algo -> row
+    for r in rows:
+        scen[(r["map"], int(r["agents"]), r["scenario"])][r["algorithm"]] = r
+    maps = sorted({m for m, _, _ in scen})
+    timeout = "60 s"
+    stats = []  # per (map, agents)
+    for m in maps:
+        for k in sorted({k for mm, k, _ in scen if mm == m}):
+            inst = [d for (mm, kk, _), d in scen.items() if mm == m and kk == k]
+            # None = this variant was not run on this map (shown as "–", not as 0 solved)
+            solved = {a: (sum(d.get(a, {}).get("solved") == "1" for d in inst) if any(a in d for d in inst) else None)
+                      for a in variants}
+            both = [d for d in inst if d.get("cbs-m5", {}).get("solved") == "1" and d.get("cbs-ml", {}).get("solved") == "1"]
+            fewer = sum(int(d["cbs-ml"]["ct_expanded"]) < int(d["cbs-m5"]["ct_expanded"]) for d in both)
+            more = sum(int(d["cbs-ml"]["ct_expanded"]) > int(d["cbs-m5"]["ct_expanded"]) for d in both)
+            ratios = [int(d["cbs-m5"]["ct_expanded"]) / max(1, int(d["cbs-ml"]["ct_expanded"])) for d in both]
+            stats.append(dict(
+                map=m, agents=k, n=len(inst), solved=solved, both=len(both), fewer=fewer, same=len(both) - fewer - more,
+                more=more, ratio=median(ratios) if ratios else None,
+                nodes_m5=sum(int(d["cbs-m5"]["ct_expanded"]) for d in both),
+                nodes_ml=sum(int(d["cbs-ml"]["ct_expanded"]) for d in both),
+                t_m5=median([float(d["cbs-m5"]["seconds"]) for d in both]),
+                t_ml=median([float(d["cbs-ml"]["seconds"]) for d in both])))
+
+    dense = [m for m in maps if m.endswith("small")] or maps[:1]
+
+    def draw_success(theme, path):
+        fig, ax = plt.subplots(figsize=(7.2, 4.0))
+        style(ax, fig, theme)
+        ks = [st["agents"] for st in stats if st["map"] == dense[0]]
+        xs = list(range(len(ks)))
+        for i, a in enumerate(variants):
+            label, light, dark = SERIES[a]
+            ys = [100.0 * st["solved"][a] / st["n"] if st["solved"][a] is not None else float("nan")
+                  for st in stats if st["map"] == dense[0]]
+            off = (i - (len(variants) - 1) / 2) * 0.06
+            ax.plot([x + off for x in xs], ys, color=light if theme == "light" else dark, linewidth=1.8, marker="o",
+                    markersize=6, markeredgecolor=THEMES[theme]["surface"], markeredgewidth=1.5, label=label)
+        ax.set_xticks(xs, [str(k) for k in ks])
+        ax.set_ylim(-4, 104)
+        ax.set_ylabel("solved (%)")
+        ax.set_xlabel("robots")
+        n = max(st["n"] for st in stats)
+        where = "small warehouse, 27 x 21, 1-wide aisles" if dense[0].endswith("small") else dense[0]
+        finish(fig, ax, theme, "Which conflict CBS splits: share of instances solved",
+               f"{where} · {n} instances per fleet size · {timeout} per solve · all optimal", path)
+
+    def draw_wins(theme, path):
+        t = THEMES[theme]
+        fig, ax = plt.subplots(figsize=(7.2, 4.4))
+        style(ax, fig, theme)
+        ax.yaxis.grid(False)
+        ax.xaxis.grid(True, color=t["grid"], linewidth=0.8)
+        shown = [st for st in stats if st["both"] > 0]
+        ys = list(range(len(shown)))[::-1]
+        neutral = "#b5b4ae" if theme == "light" else "#5f5e5a"
+        parts = (("fewer", t["pos"], "ML needs fewer nodes"), ("same", neutral, "same"), ("more", t["neg"], "ML needs more nodes"))
+        left = [0] * len(shown)
+        for key, color, label in parts:
+            vals = [100.0 * st[key] / st["both"] for st in shown]
+            ax.barh(ys, vals, left=left, height=0.62, color=color, label=label, edgecolor=t["surface"], linewidth=2)
+            for y, v, l, st in zip(ys, vals, left, shown):
+                if v >= 9:
+                    ax.text(l + v / 2, y, str(st[key]), ha="center", va="center", fontsize=8.5,
+                            color="#ffffff" if key != "same" else t["text"])
+            left = [l + v for l, v in zip(left, vals)]
+        ax.set_yticks(ys, [f"{st['map'].replace('generated-', '')}, {st['agents']} robots" for st in shown])
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("instances solved by both (%)")
+        finish(fig, ax, theme, "Learned ranker vs the M5 cardinal rule, instance by instance",
+               "CT nodes expanded on each instance both solved · numbers = instances", path, left=0.2)
+
+    both_themes(draw_success, out, "ml-success")
+    both_themes(draw_wins, out, "ml-wins")
+
+    md = ["### Learned conflict selection (CBS + ML)\n",
+          f"Same optimal plans, different trees. {timeout} per solve; instance seeds 1-25 (the ranker was trained on "
+          "seeds 1001-1060). M5 = cardinal rule, ML = shipped ranker, oracle = split every conflict for real.\n",
+          "| map | robots | solved: " + " / ".join(SERIES[a][0] for a in variants)
+          + " | ML vs M5 on instances both solved: fewer / same / more nodes | median per-instance node ratio M5/ML "
+            "| total nodes M5 → ML | median time M5 → ML |",
+          "|---|---|---|---|---|---|---|"]
+    for st in stats:
+        solved = " / ".join("–" if st["solved"][a] is None else str(st["solved"][a]) for a in variants) + f" of {st['n']}"
+        if st["both"]:
+            md.append(f"| {st['map']} | {st['agents']} | {solved} | {st['fewer']} / {st['same']} / {st['more']} | "
+                      f"{st['ratio']:.2f}× | {st['nodes_m5']:,} → {st['nodes_ml']:,} | "
+                      f"{st['t_m5'] * 1000:.1f} → {st['t_ml'] * 1000:.1f} ms |")
+        else:
+            md.append(f"| {st['map']} | {st['agents']} | {solved} | – | – | – | – |")
+    return "\n".join(md) + "\n", stats
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bench", nargs="*", default=[])
     ap.add_argument("--lifelong", nargs="*", default=[])
+    ap.add_argument("--ml", nargs="*", default=[], help="CSVs of the conflict-selection benchmark (cbs-ml etc.)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
@@ -384,6 +483,9 @@ def main():
         parts.append(text)
     if args.lifelong:
         text, _ = lifelong_charts(read_csv(args.lifelong), args.out)
+        parts.append(text)
+    if args.ml:
+        text, _ = ml_charts(read_csv(args.ml), args.out)
         parts.append(text)
     with open(os.path.join(args.out, "summary.md"), "w") as f:
         f.write("<!-- Generated by scripts/plot_bench.py from the benchmark CSVs. -->\n\n" + "\n".join(parts))

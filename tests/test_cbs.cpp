@@ -32,7 +32,7 @@ std::vector<CbsOptions> allVariants() {
     std::vector<CbsOptions> out;
     for (int mask = 0; mask < 4; ++mask) {
         CbsOptions o;
-        o.prioritizeConflicts = (mask & 1) != 0;
+        o.selection = (mask & 1) != 0 ? swarmgrid::ConflictSelection::Cardinal : swarmgrid::ConflictSelection::First;
         o.bypass = (mask & 2) != 0;
         out.push_back(o);
     }
@@ -41,7 +41,7 @@ std::vector<CbsOptions> allVariants() {
 
 CbsOptions plainCbs() {
     CbsOptions o;
-    o.prioritizeConflicts = false;
+    o.selection = swarmgrid::ConflictSelection::First;
     o.bypass = false;
     return o;
 }

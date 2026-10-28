@@ -1,0 +1,43 @@
+# Python package: pip install .   (builds the C++ core with CMake through scikit-build-core)
+# Import name: swarmgrid. Distribution name: swarmgrid-mapf (the name "swarmgrid" on PyPI belongs to
+# an unrelated project).
+[build-system]
+requires = ["scikit-build-core>=0.11", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "swarmgrid-mapf"
+version = "0.2.0"
+description = "Collision-free paths for warehouse robot fleets: CBS (with ML-guided conflict selection), ECBS, prioritized planning and lifelong RHCR, on a C++17 core."
+readme = "python/README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "tabish2786" }]
+keywords = ["multi-agent path finding", "MAPF", "conflict-based search", "CBS", "ECBS", "robotics", "warehouse", "path planning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/tabish2786/SwarmGrid"
+Documentation = "https://github.com/tabish2786/SwarmGrid/blob/main/python/README.md"
+"Live demo" = "https://tabish2786.github.io/SwarmGrid/control.html"
+
+[tool.scikit-build]
+cmake.version = ">=3.18"
+cmake.build-type = "Release"
+wheel.packages = ["python/swarmgrid"]
+sdist.exclude = ["docs", "web", ".github", "scripts", "data"]
+
+[tool.scikit-build.cmake.define]
+SWARMGRID_BUILD_TESTS = "OFF"
+SWARMGRID_BUILD_CLI = "OFF"
+SWARMGRID_BUILD_PYTHON = "ON"

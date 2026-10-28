@@ -1,0 +1,26 @@
+# SwarmGrid conflict ranker: score = sum of weight * feature (fixed point)
+# Written by scripts/train_conflict_ranker.py from: r1-large.csv, r1-small.csv, r2-large.csv, r2-small.csv
+# trained on 439015 conflicts from 26376 nodes of 576 instances (2383652 pairs); held out 106892 conflicts from 6639 nodes of 144 instances (seed % 5 == 0)
+# held-out pairwise accuracy of the learned model: 0.999
+# held-out nodes where conflicts differ: picks the oracle's best conflict / mean lower-bound increase lost vs the oracle:
+#   earliest conflict (M4)   0.111 / 0.334   (5944 nodes)
+#   cardinal rule (M5)       0.382 / 0.000   (5944 nodes)
+#   learned (this model)     0.979 / 0.012   (5944 nodes)
+is_vertex -65942
+is_edge -69313
+is_target 152559
+is_cardinal 885845
+is_semi_cardinal 272483
+time 7722
+mdd_width_min -25239
+mdd_width_max -1209
+agent_conflicts_min -920
+agent_conflicts_max 205
+path_cost_min -9077
+path_cost_max 1850
+delay_min -213
+delay_max -429
+constraints_min -5624
+constraints_max 2598
+goal_dist_min 6710
+goal_dist_max -1653

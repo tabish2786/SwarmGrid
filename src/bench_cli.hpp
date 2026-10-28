@@ -6,9 +6,11 @@
 //   swarmgrid bench --out results.csv [options]          M7: one CSV row per (instance, solver)
 //   swarmgrid lifelong [options]                          M8: one simulation, printed
 //   swarmgrid lifelong-bench --out lifelong.csv [options] M8: sweep, one CSV row per run
+//   swarmgrid ml-data --out ml.csv [options]              training data for the conflict ranker
 //
 // Run any of them with --help for the options.
 
 int runBench(int argc, char** argv);
 int runLifelongCommand(int argc, char** argv);
 int runLifelongBench(int argc, char** argv);
+int runMlData(int argc, char** argv);

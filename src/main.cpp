@@ -11,6 +11,7 @@
 //   swarmgrid bench --out results.csv [options]            (M7, see bench_cli.hpp)
 //   swarmgrid lifelong [options]                            (M8)
 //   swarmgrid lifelong-bench --out lifelong.csv [options]   (M8)
+//   swarmgrid ml-data --out ml.csv [options]                (conflict ranker training data)
 
 #include <cstddef>
 #include <cstdint>
@@ -50,7 +51,8 @@ void printUsage() {
               << "  swarmgrid cbs-bench [timeLimitSeconds]\n"
               << "  swarmgrid bench --out results.csv [options]   (--help for options)\n"
               << "  swarmgrid lifelong [options]                  (--help for options)\n"
-              << "  swarmgrid lifelong-bench --out lifelong.csv [options]\n";
+              << "  swarmgrid lifelong-bench --out lifelong.csv [options]\n"
+              << "  swarmgrid ml-data --out ml.csv [options]      (training data for the conflict ranker)\n";
 }
 
 // Strict integer argument: the whole text must be a number, otherwise an error that names the
@@ -341,7 +343,7 @@ swarmgrid::PlanExport cbsPlan(const swarmgrid::MapfInstance& inst, const std::st
         throw std::runtime_error("CBS failed or produced an invalid plan for " + id);
     }
     swarmgrid::CbsOptions plainOptions;
-    plainOptions.prioritizeConflicts = false;
+    plainOptions.selection = swarmgrid::ConflictSelection::First;
     plainOptions.bypass = false;
     const swarmgrid::CbsResult plain = swarmgrid::solveCbs(inst.grid, starts, goals, plainOptions);
     swarmgrid::PlanExport plan;
@@ -522,7 +524,7 @@ int runCbsBench(int argc, char** argv) {
             opts.timeLimitSeconds = limit;
             opts.maxNodes = 1000000;
             const swarmgrid::CbsResult m5 = swarmgrid::solveCbs(g, s, t, opts);
-            opts.prioritizeConflicts = false;
+            opts.selection = swarmgrid::ConflictSelection::First;
             opts.bypass = false;
             const swarmgrid::CbsResult plain = swarmgrid::solveCbs(g, s, t, opts);
             const swarmgrid::MultiAgentResult p =
@@ -585,6 +587,7 @@ int main(int argc, char** argv) {
         if (cmd == "bench") return runBench(argc, argv);
         if (cmd == "lifelong") return runLifelongCommand(argc, argv);
         if (cmd == "lifelong-bench") return runLifelongBench(argc, argv);
+        if (cmd == "ml-data") return runMlData(argc, argv);
         printUsage();
         return 1;
     } catch (const std::exception& e) {

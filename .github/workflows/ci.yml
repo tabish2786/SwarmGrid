@@ -46,3 +46,22 @@ jobs:
           [ -f build/Release/swarmgrid.exe ] && exe=build/Release/swarmgrid.exe
           "$exe" export-demos docs/data.js
           git diff --exit-code -- docs/data.js
+
+  python-package:
+    name: Python package (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and install
+        run: pip install .
+
+      - name: Test
+        run: python -m unittest discover -s tests/python -v
+
+      - name: Run the quick start example
+        run: python python/examples/quickstart.py

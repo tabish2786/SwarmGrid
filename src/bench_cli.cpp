@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -164,8 +165,9 @@ struct Row {
     long long lowLevel = 0;
 };
 
+// ranker: model for cbs-ml (nullptr = the one shipped with the code).
 Row runAlgorithm(const std::string& algo, const swarmgrid::Grid& g, const std::vector<swarmgrid::CellId>& s,
-                 const std::vector<swarmgrid::CellId>& t, double timeout) {
+                 const std::vector<swarmgrid::CellId>& t, double timeout, const swarmgrid::ConflictRanker* ranker) {
     Row row;
     row.algorithm = algo;
     if (algo == "pp") {
@@ -182,11 +184,16 @@ Row runAlgorithm(const std::string& algo, const swarmgrid::Grid& g, const std::v
         }
         return row;
     }
-    if (algo == "cbs" || algo == "cbs-m5") {
+    if (algo == "cbs" || algo == "cbs-m5" || algo == "cbs-ml" || algo == "cbs-oracle") {
         swarmgrid::CbsOptions o;
         o.maxNodes = 100000000;
         o.timeLimitSeconds = timeout;
-        o.prioritizeConflicts = o.bypass = algo == "cbs-m5";
+        o.selection = algo == "cbs" ? swarmgrid::ConflictSelection::First
+                    : algo == "cbs-m5" ? swarmgrid::ConflictSelection::Cardinal
+                    : algo == "cbs-ml" ? swarmgrid::ConflictSelection::Learned
+                                       : swarmgrid::ConflictSelection::Oracle;
+        o.bypass = algo != "cbs";
+        if (ranker != nullptr) o.ranker = *ranker;
         const auto r = swarmgrid::solveCbs(g, s, t, o);
         row.solved = r.solved;
         row.timeout = r.limitReached;
@@ -224,13 +231,13 @@ Row runAlgorithm(const std::string& algo, const swarmgrid::Grid& g, const std::v
         }
         return row;
     }
-    throw std::invalid_argument("unknown algorithm '" + algo + "' (pp, cbs, cbs-m5, ecbs-<w>)");
+    throw std::invalid_argument("unknown algorithm '" + algo + "' (pp, cbs, cbs-m5, cbs-ml, cbs-oracle, ecbs-<w>)");
 }
 
 }  // namespace
 
 int runBench(int argc, char** argv) {
-    const Args a(argc, argv, 2, {"out", "map", "scen-dir", "generated", "agents", "scenarios", "timeout", "algos", "shard"});
+    const Args a(argc, argv, 2, {"out", "map", "scen-dir", "generated", "agents", "scenarios", "timeout", "algos", "shard", "model"});
     if (a.help() || !a.has("out")) {
         std::cout <<
             "swarmgrid bench --out results.csv [options]\n"
@@ -240,7 +247,8 @@ int runBench(int argc, char** argv) {
             "  --agents 10,20,30,50,100       fleet sizes\n"
             "  --scenarios 25                 instances per fleet size\n"
             "  --timeout 60                   seconds per solve (CBS / ECBS)\n"
-            "  --algos pp,cbs,cbs-m5,ecbs-1.05,ecbs-1.2\n"
+            "  --algos pp,cbs,cbs-m5,ecbs-1.05,ecbs-1.2   also: cbs-ml (learned conflict ranking), cbs-oracle\n"
+            "  --model FILE                   conflict ranker for cbs-ml (default: the shipped model)\n"
             "  --shard i/n                    run only jobs i, i+n, i+2n, ... (parallel runs: one CSV each, all go to plot_bench.py)\n";
         return a.help() ? 0 : 1;
     }
@@ -248,6 +256,8 @@ int runBench(int argc, char** argv) {
     const int scenarios = a.integer("scenarios", 25);
     const double timeout = a.real("timeout", 60.0);
     const std::vector<std::string> algos = a.strList("algos", {"pp", "cbs", "cbs-m5", "ecbs-1.05", "ecbs-1.2"});
+    std::optional<swarmgrid::ConflictRanker> model;
+    if (a.has("model")) model = swarmgrid::ConflictRanker::load(a.str("model", ""));
     int shardIndex = 0, shardCount = 1;
     if (a.has("shard")) {
         const std::string sh = a.str("shard", "0/1");
@@ -295,7 +305,7 @@ int runBench(int argc, char** argv) {
             const auto s = ids(grid, inst.starts);
             const auto t = ids(grid, inst.goals);
             for (const std::string& algo : algos) {
-                const Row r = runAlgorithm(algo, grid, s, t, timeout);
+                const Row r = runAlgorithm(algo, grid, s, t, timeout, model ? &*model : nullptr);
                 out << mapName << ',' << k << ',' << sc + 1 << ',' << r.algorithm << ',' << (r.solved ? 1 : 0) << ','
                     << (r.timeout ? 1 : 0) << ',' << r.soc << ',' << r.makespan << ',' << r.lowerBound << ','
                     << std::setprecision(6) << r.seconds << ',' << r.ctExpanded << ',' << r.ctGenerated << ','
@@ -425,5 +435,90 @@ int runLifelongBench(int argc, char** argv) {
             }
         }
     }
+    return 0;
+}
+
+// ---------------------------------------------------------------- ML training data
+
+namespace {
+
+// "1001-1040" or "3,5,9".
+std::vector<std::uint32_t> parseSeeds(const std::string& text) {
+    std::vector<std::uint32_t> out;
+    const auto dash = text.find('-');
+    try {
+        if (dash != std::string::npos && text.find(',') == std::string::npos) {
+            const unsigned long lo = std::stoul(text.substr(0, dash));
+            const unsigned long hi = std::stoul(text.substr(dash + 1));
+            if (hi < lo || hi - lo > 100000) throw std::invalid_argument("range");
+            for (unsigned long v = lo; v <= hi; ++v) out.push_back(static_cast<std::uint32_t>(v));
+        } else {
+            for (const std::string& part : Args::split(text)) out.push_back(static_cast<std::uint32_t>(std::stoul(part)));
+        }
+    } catch (const std::exception&) {
+        throw std::invalid_argument("--seeds: expected a range like 1001-1040 or a list like 3,5,9");
+    }
+    if (out.empty()) throw std::invalid_argument("--seeds: no seeds");
+    return out;
+}
+
+}  // namespace
+
+int runMlData(int argc, char** argv) {
+    const Args a(argc, argv, 2, {"out", "generated", "agents", "seeds", "collect", "model", "nodes", "conflicts"});
+    if (a.help() || !a.has("out")) {
+        std::cout <<
+            "swarmgrid ml-data --out ml.csv [options]   training data for the conflict ranker\n"
+            "  --generated small|large     map (default: large)\n"
+            "  --agents 20,30,40           fleet sizes\n"
+            "  --seeds 1001-1040           instance seeds (keep them apart from the benchmark seeds 1-25)\n"
+            "  --collect cardinal|learned|first   which selection drives the search while recording\n"
+            "                              (learned + --model = a DAgger round on the model's own nodes)\n"
+            "  --model FILE                ranker for --collect learned (default: the shipped model)\n"
+            "  --nodes 50                  CT nodes recorded (and expanded) per instance\n"
+            "  --conflicts 20              conflicts measured per node (evenly spread over its list)\n"
+            "Each row: one conflict of one CT node, its features, and the oracle's measurement (split it\n"
+            "for real: how much the cheaper child and both children cost more than the node).\n";
+        return a.help() ? 0 : 1;
+    }
+    const std::string which = a.str("generated", "large");
+    const swarmgrid::Grid grid = generatedMap(which);
+    const std::vector<int> agents = a.intList("agents", {20, 30, 40});
+    const std::vector<std::uint32_t> seeds = parseSeeds(a.str("seeds", "1001-1040"));
+    const std::string collect = a.str("collect", "cardinal");
+    swarmgrid::CbsOptions o;
+    o.bypass = true;
+    if (collect == "cardinal") o.selection = swarmgrid::ConflictSelection::Cardinal;
+    else if (collect == "learned") o.selection = swarmgrid::ConflictSelection::Learned;
+    else if (collect == "first") o.selection = swarmgrid::ConflictSelection::First;
+    else throw std::invalid_argument("--collect: cardinal, learned or first");
+    if (a.has("model")) o.ranker = swarmgrid::ConflictRanker::load(a.str("model", ""));
+    o.sampleMaxNodes = a.integer("nodes", 50);
+    o.sampleMaxConflicts = a.integer("conflicts", 20);
+    o.maxNodes = o.sampleMaxNodes;  // only the recorded nodes are needed: stop there (deterministic)
+
+    std::ofstream out(a.str("out", ""), std::ios::binary);
+    if (!out) throw std::runtime_error("cannot write " + a.str("out", ""));
+    out << "map,agents,seed,node,conflict_index";
+    for (int i = 0; i < swarmgrid::kConflictFeatures; ++i) out << ',' << swarmgrid::conflictFeatureName(i);
+    out << ",min_increase,sum_increase\n";
+    long long rows = 0;
+    for (int k : agents) {
+        for (std::uint32_t seed : seeds) {
+            const swarmgrid::MapfInstance inst = swarmgrid::generateRandomInstance(grid, k, seed);
+            std::vector<swarmgrid::ConflictSample> samples;
+            o.samples = &samples;
+            const swarmgrid::CbsResult r = swarmgrid::solveCbs(grid, ids(grid, inst.starts), ids(grid, inst.goals), o);
+            for (const swarmgrid::ConflictSample& smp : samples) {
+                out << "generated-" << which << ',' << k << ',' << seed << ',' << smp.node << ',' << smp.conflictIndex;
+                for (std::int64_t v : smp.features) out << ',' << v;
+                out << ',' << smp.minIncrease << ',' << smp.sumIncrease << '\n';
+            }
+            rows += static_cast<long long>(samples.size());
+            std::cerr << "k=" << k << " seed " << seed << ": " << samples.size() << " samples from "
+                      << r.nodesExpanded << " nodes" << (r.solved ? " (solved)" : "") << '\n';
+        }
+    }
+    std::cerr << "wrote " << rows << " rows to " << a.str("out", "") << '\n';
     return 0;
 }

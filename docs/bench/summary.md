@@ -77,3 +77,19 @@ Cell: solved / instances · median seconds over the solved ones.
 | 30 | 0.899 | 0.915 | +1.8% | 8/10 | -0.9% … +4.3% | 6.95 → 6.86 (-1.4%) |
 | 40 | 1.188 | 1.192 | +0.4% | 6/10 | -2.7% … +2.4% | 6.47 → 6.33 (-2.1%) |
 | 50 | 1.455 | 1.468 | +0.9% | 7/10 | -0.7% … +4.3% | 5.93 → 5.84 (-1.5%) |
+
+### Learned conflict selection (CBS + ML)
+
+Same optimal plans, different trees. 60 s per solve; instance seeds 1-25 (the ranker was trained on seeds 1001-1060). M5 = cardinal rule, ML = shipped ranker, oracle = split every conflict for real.
+
+| map | robots | solved: CBS (M4) / CBS + M5 / CBS + ML / CBS + oracle | ML vs M5 on instances both solved: fewer / same / more nodes | median per-instance node ratio M5/ML | total nodes M5 → ML | median time M5 → ML |
+|---|---|---|---|---|---|---|
+| generated-large | 10 | – / 25 / 25 / 25 of 25 | 2 / 22 / 1 | 1.00× | 74 → 73 | 1.3 → 1.4 ms |
+| generated-large | 20 | – / 25 / 25 / 25 of 25 | 7 / 12 / 6 | 1.00× | 2,271 → 2,028 | 6.2 → 6.4 ms |
+| generated-large | 30 | – / 24 / 24 / 24 of 25 | 12 / 5 / 7 | 1.03× | 991 → 10,767 | 20.4 → 20.8 ms |
+| generated-large | 50 | – / 24 / 24 / 23 of 25 | 15 / 1 / 8 | 1.06× | 14,096 → 3,891 | 202.3 → 199.8 ms |
+| generated-large | 100 | – / 0 / 0 / 0 of 25 | – | – | – | – |
+| generated-small | 10 | 23 / 25 / 25 / 25 of 25 | 9 / 10 / 6 | 1.00× | 978 → 966 | 0.9 → 1.0 ms |
+| generated-small | 15 | 20 / 25 / 25 / 24 of 25 | 14 / 3 / 8 | 1.14× | 742,239 → 89,351 | 3.8 → 3.9 ms |
+| generated-small | 20 | 6 / 23 / 23 / 23 of 25 | 21 / 0 / 2 | 2.86× | 172,586 → 56,470 | 523.7 → 134.9 ms |
+| generated-small | 25 | 4 / 10 / 15 / 11 of 25 | 7 / 0 / 3 | 1.82× | 455,935 → 258,831 | 998.8 → 437.1 ms |

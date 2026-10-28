@@ -11,3 +11,9 @@ results/
 !data/**/*.csv
 !docs/bench/data/*.csv
 __pycache__/
+*.egg-info/
+dist/
+wheelhouse/
+.venv/
+*.so
+*.pyd

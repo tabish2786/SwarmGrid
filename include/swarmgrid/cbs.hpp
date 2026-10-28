@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "swarmgrid/astar.hpp"
+#include "swarmgrid/conflict_ranking.hpp"
 #include "swarmgrid/grid.hpp"
 
 namespace swarmgrid {
@@ -20,25 +21,45 @@ namespace swarmgrid {
 //   Edge (a1: cell->to, a2: to->cell, t): child 1 forbids a1's move, child 2 forbids a2's move.
 // OPEN order: smaller sum-of-costs, then fewer conflicts, then older node. Deterministic.
 //
-// M5 (Boyarski et al., 2015, "ICBS"), both on by default and both keep CBS optimal:
-//   prioritizeConflicts: classify every conflict of the node with MDDs (mdd.hpp). A conflict is
-//     cardinal if BOTH children must get more expensive (each agent's optimal paths all use the
-//     conflicting cell/move), semi-cardinal if one must, non-cardinal otherwise. Branch on the
-//     first cardinal, else the first semi-cardinal, else the first conflict. Splitting on a
-//     cardinal conflict raises the lower bound right away instead of growing a wide tree of
-//     equal-cost nodes.
-//   bypass: if a child has the parent's cost and fewer conflicts, take its new path into the
-//     parent and put the parent back in OPEN instead of adding two children.
-// With both off this is the plain CBS of M4 (the tests pin its node counts).
+// Which conflict to split. Any choice keeps CBS optimal; it only changes the size of the tree.
+enum class ConflictSelection {
+    // M4: the earliest conflict.
+    First,
+    // M5 (Boyarski et al., 2015, "ICBS"): classify every conflict of the node with MDDs
+    // (mdd.hpp). A conflict is cardinal if BOTH children must get more expensive (each agent's
+    // optimal paths all use the conflicting cell/move), semi-cardinal if one must, non-cardinal
+    // otherwise. Split the first cardinal, else the first semi-cardinal, else the first conflict:
+    // a cardinal split raises the lower bound right away instead of growing a wide tree of
+    // equal-cost nodes.
+    Cardinal,
+    // ML: score every conflict with CbsOptions::ranker (conflict_ranking.hpp) and split the
+    // highest score (ties: the earlier conflict).
+    Learned,
+    // Strong branching: split every conflict for real (two low-level searches each) and keep the
+    // one whose cheaper child costs most (ties: the larger total, then the earlier conflict). Small
+    // trees but expensive nodes; it is what Learned is trained to imitate.
+    Oracle,
+};
+
+// M5 bypass (also Boyarski et al.): if a child has the parent's cost and fewer conflicts, take
+// its new path into the parent and put the parent back in OPEN instead of adding two children.
+// With selection = First and bypass off this is the plain CBS of M4 (the tests pin its node counts).
 struct CbsOptions {
     int maxNodes = 100000;          // CT nodes to expand before giving up
     double timeLimitSeconds = 0.0;  // wall-clock limit; 0 = none (results then depend only on input)
-    bool prioritizeConflicts = true;
+    ConflictSelection selection = ConflictSelection::Cardinal;
     bool bypass = true;
+    ConflictRanker ranker;          // used by ConflictSelection::Learned; default = shipped model
     // M8 rolling horizon: if >= 0, only conflicts at t <= window are resolved (the plan is
     // collision-free up to then and each robot simply drives its shortest way after it).
     // Optimality then refers to that relaxed problem. -1 = whole paths (normal MAPF).
     int window = -1;
+    // Training data for the ranker: if set, every one of the first sampleMaxNodes expanded nodes
+    // appends the features and oracle measurements of up to sampleMaxConflicts of its conflicts
+    // (evenly spread over its conflict list). Recording does not change the search.
+    std::vector<ConflictSample>* samples = nullptr;
+    int sampleMaxNodes = 50;
+    int sampleMaxConflicts = 20;
 };
 
 struct CbsResult {
@@ -55,10 +76,12 @@ struct CbsResult {
     int semiCardinalSplits = 0;
     int nonCardinalSplits = 0;
     int mddsBuilt = 0;
+    long long oracleReplans = 0; // low-level searches spent measuring conflicts (Oracle, samples)
     double seconds = 0.0;        // measured wall-clock time
 };
 
-// Throws std::invalid_argument for bad agents (see requireValidAgents) or maxNodes < 1.
+// Throws std::invalid_argument for bad agents (see requireValidAgents), maxNodes < 1, or
+// sampleMaxNodes / sampleMaxConflicts < 1 when samples is set.
 CbsResult solveCbs(const Grid& grid, const std::vector<CellId>& starts,
                    const std::vector<CellId>& goals, const CbsOptions& options = {});
 

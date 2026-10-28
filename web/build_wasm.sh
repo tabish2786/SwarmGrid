@@ -19,7 +19,7 @@ EXPORTS='_sg_width,_sg_height,_sg_is_free,_sg_clear_agents,_sg_add_agent,_sg_ran
 
 em++ -std=c++17 -O2 -fexceptions -Wall -Wextra -Iinclude \
   src/grid.cpp src/heuristic.cpp src/astar.cpp src/constraints.cpp src/space_time_astar.cpp \
-  src/prioritized.cpp src/conflicts.cpp src/mdd.cpp src/cbs.cpp src/ecbs.cpp src/task_assignment.cpp \
+  src/prioritized.cpp src/conflicts.cpp src/mdd.cpp src/conflict_ranking.cpp src/cbs.cpp src/ecbs.cpp src/task_assignment.cpp \
   src/warehouse_gen.cpp web/wasm_api.cpp \
   -sMODULARIZE=1 -sEXPORT_NAME=createSwarmGridPlanner -sSINGLE_FILE=1 \
   -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web,worker,node -sFILESYSTEM=0 \
